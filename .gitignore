@@ -49,6 +49,8 @@ build/
 develop-eggs/
 dist/
 downloads/
+result_json/
+classify_json/
 eggs/
 .eggs/
 lib/
