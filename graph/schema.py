@@ -113,26 +113,28 @@ class BollingerClause(TypedDict):
     band: Literal["upper", "lower"]
     touch: bool
 
-SignalClause = Annotated[Union[VolumeSignalClause, MovingAverageClause, RSIClause, BollingerClause, CrossEventsClause],
-                         Field(description="type")]
+SignalClause = Annotated[
+    Union[VolumeSignalClause, MovingAverageClause, RSIClause, BollingerClause, CrossEventsClause],
+    Field(discriminator="type"),
+]
 
 # ---------- task1 / task2 / task3 ----------
 class Task1(BaseModel):
     date: Optional[Union[str, List[str]]] = None
     market: Optional[Union[str, List[str]]] = None
-    clauses: List[Task1Clause] = Field(default_factory=list)
+    clauses: Optional[List[Task1Clause]] = Field(default_factory=list)
 
 class Task2(BaseModel):
     date: str
     market: Optional[str] = None
-    clauses: List[Clause] = Field(default_factory=list)
+    clauses: Optional[List[Clause]] = Field(default_factory=list)
 
 class Task3(BaseModel):
     company_name: Optional[str] = Field(None, description="특정 종목명 (없으면 전체 검색)")
     market: Optional[str] = Field(None, description="시장 (예: KOSPI, KOSDAQ)")
     period_start: Optional[str] = Field(..., description="조회 시작일 (YYYY-MM-DD)")
     period_end: Optional[str] = Field(..., description="조회 종료일 (YYYY-MM-DD)")
-    signal_type: Union[SignalClause, List[SignalClause]] = Field(..., description="기술적 조건")
+    signal_type: Optional[List[SignalClause]] = Field(default=None, description="기술적 조건 (단일 또는 배열 입력 가능)")
     mode: Optional[Literal["count", "list", "both"]] = Field(default="list", description="조회 모드 (개수, 목록, 둘 다)")
 # ---------- 상태 정의 ----------
 

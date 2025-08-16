@@ -7,7 +7,7 @@ import os
 import json
 from typing import Literal
 from schema import State, Task1, Task2, Task3
-from utils import parse_tool_json, check_task1, check_task2, check_task3, ENGINE
+from utils import parse_tool_json, check_task1, check_task2, check_task3
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
@@ -60,7 +60,7 @@ def chatbot(state: State) -> Command[Literal["llm_answer"]]:
     messages = state["messages"][-1]
     result = llm.invoke(messages)
     return Command(goto="llm_answer",
-                   update={"answer": result.content})
+                   update={"answer": [result.content]})
 
 def query_parsing(state: State) -> Command[Literal["db_check", "human"]]:
     messages = state["messages"][-1]
@@ -116,20 +116,17 @@ def db_check(state: State) -> Command[Literal["task1", "task2", "task3", "human"
 
     match task_class:
         case "Task1":
-            ok, err, info = check_task1(task_obj)
-            if not ok:
+            if not check_task1(task_obj):
                 return Command(goto="human")
             return Command(goto="task1")
 
         case "Task2":
-            ok, err, info = check_task2(task_obj)
-            if not ok:
+            if not check_task2(task_obj):
                 return Command(goto="human")
             return Command(goto="task2")
 
         case "Task3":
-            ok, err, info = check_task3(task_obj)
-            if not ok:
+            if not check_task3(task_obj):
                 return Command(goto="human")
             return Command(goto="task3")
 
@@ -137,7 +134,7 @@ def db_check(state: State) -> Command[Literal["task1", "task2", "task3", "human"
             return Command(goto="human")
 
 test = {
-    "messages": [HumanMessage(content="2025-02-17에 거래량이 20일 평균 대비 300% 이상 급증한 종목을 알려줘")],
+    "messages": [HumanMessage(content="삼전이 적삼병일 때를 알려줘")],
     "task_name": "Task3",
     "task": Task3(company_name=None, market=None, period_start="", period_end="",
                   signal_type=[], mode="list"),
