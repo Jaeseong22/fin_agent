@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import csv
+import re
 import json
 import os
+import difflib 
 from datetime import date, timedelta
 from typing import Any, Optional, Tuple, Dict, List, Union
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from schema import State
+from pathlib import Path
+
+try:
+    from rapidfuzz import process as rf_process, fuzz as rf_fuzz
+    _HAS_RAPIDFUZZ = True
+except Exception:
+    _HAS_RAPIDFUZZ = False
+
 
 from sqlalchemy import create_engine, text, bindparam
 from sqlalchemy.engine import Engine
@@ -17,6 +28,12 @@ load_dotenv()
 # ============================================================
 # 환경 변수 & 엔진
 # ============================================================
+
+COMPANY_CSV = Path("/Users/jaeseong/Documents/finance_agent/graph/company_name.csv")
+TERMS_CSV   = Path("/Users/jaeseong/Documents/finance_agent/graph/stock_terms.csv")
+
+_COMPANY_ALIASES: List[Dict[str, str]] = []
+_TERM_RULES: List[Dict[str, str]] = []
 
 def _env(name: str, default: Optional[str] = None, required: bool = False) -> str:
     val = os.getenv(name, default)
@@ -128,17 +145,41 @@ def _market_filter(market: Optional[Union[str, List[str]]]) -> Tuple[str, Dict[s
     sql = " AND (" + " OR ".join(conds) + ") "
     return sql, params
 
-def _market_filter_sql_for(alias: str, market: Optional[List[str]]) -> Tuple[str, Dict[str, Any]]:
+def _market_filter_names_sql(alias: str, market: Optional[Union[str, List[str]]]) -> Tuple[str, Dict[str, Any]]:
     markets = _normalize_market(market)
     if not markets:
         return "", {}
-    conds, params = [], {}
-    for i, m in enumerate(markets):
-        key = f"m{i}"
-        conds.append(f"{alias}.name LIKE :{key}")
-        params[key] = f"{m}%"
-    # ★ AND 없이 괄호만
-    return "(" + " OR ".join(conds) + ")", params
+    aliases = _load_company_aliases()
+    # official(정식명) 기준으로 시장 묶기
+    names = {a["official"] for a in aliases if a.get("market") in markets}
+    if not names:
+        return "", {}
+    # IN (:n0, :n1, ...)
+    params = {}
+    keys = []
+    for i, nm in enumerate(sorted(names)):
+        k = f"nm{i}"
+        keys.append(f":{k}")
+        params[k] = nm
+    cond = f" AND {alias}.name IN ({', '.join(keys)}) "
+    return cond, params
+
+def _market_filter_names_sql_plain(market: Optional[Union[str, List[str]]]) -> Tuple[str, Dict[str, Any]]:
+    markets = _normalize_market(market)
+    if not markets:
+        return "", {}
+    aliases = _load_company_aliases()
+    names = {a["official"] for a in aliases if a.get("market") in markets}
+    if not names:
+        return "", {}
+    params = {}
+    keys = []
+    for i, nm in enumerate(sorted(names)):
+        k = f"nm{i}"
+        keys.append(f":{k}")
+        params[k] = nm
+    cond = f" AND name IN ({', '.join(keys)}) "
+    return cond, params
 
 def _run_exists_query(sql: str, params: Dict[str, Any]) -> bool:
     """SELECT 1 ... LIMIT 1 형태의 존재성 확인 쿼리."""
@@ -149,7 +190,7 @@ def _run_exists_query(sql: str, params: Dict[str, Any]) -> bool:
 
 def _exists_price_on(target: date, market: Optional[Union[str, List[str]]] = None) -> bool:
     """특정 거래일 데이터 존재 여부."""
-    mf_sql, mf_params = _market_filter(market)
+    mf_sql, mf_params = _market_filter_names_sql_plain(market)
     sql = f"""
         SELECT 1
         FROM stock_prices
@@ -163,7 +204,7 @@ def _exists_price_on(target: date, market: Optional[Union[str, List[str]]] = Non
 
 def _exists_price_between(d1: date, d2: date, market: Optional[Union[str, List[str]]] = None) -> bool:
     """거래일 범위 데이터 존재 여부."""
-    mf_sql, mf_params = _market_filter(market)
+    mf_sql, mf_params = _market_filter_names_sql_plain(market)
     sql = f"""
         SELECT 1
         FROM stock_prices
@@ -177,7 +218,7 @@ def _exists_price_between(d1: date, d2: date, market: Optional[Union[str, List[s
 
 def _count_rows_between(d1: date, d2: date, market: Optional[Union[str, List[str]]] = None) -> int:
     """범위 내 전체 행 수(느슨한 커버리지 판단용)."""
-    mf_sql, mf_params = _market_filter(market)
+    mf_sql, mf_params = _market_filter_names_sql_plain(market)
     sql = f"""
         SELECT COUNT(*) AS cnt
         FROM stock_prices
@@ -822,7 +863,7 @@ def _build_from_join(need_prev: bool) -> str:
 def _build_base_where(d: date, market: Optional[List[str]]) -> Tuple[List[str], Dict[str, Any]]:
     where = ["t.trade_date = :d"]
     params: Dict[str, Any] = {"d": d}
-    mk_sql, mk_params = _market_filter_sql_for("t", market)
+    mk_sql, mk_params = _market_filter_names_sql("t", market)
     if mk_sql:
         where.append(mk_sql)
         params.update(mk_params)
@@ -929,7 +970,7 @@ def _task3_volume_signal(engine: Engine, company_name: Optional[str], market, ds
                          days: Optional[int], change_percent: Optional[float], mode: str) -> Dict[str, Any]:
     n = int(days or 20)
     nm_sql, nm_param = _name_like_sql(company_name)
-    mk_sql, mk_param = _market_filter(market)
+    mk_sql, mk_param = _market_filter_names_sql_plain(market)
 
     # 직전 N일 평균: ROWS BETWEEN N PRECEDING AND 1 PRECEDING
     # 오늘 거래량 대비 평균 변화율 계산
@@ -986,7 +1027,7 @@ def _task3_moving_average_diff(engine: Engine, company_name: Optional[str], mark
                                period: int, diff_percentage: float, direction: str, mode: str) -> Dict[str, Any]:
     n = int(period)
     nm_sql, nm_param = _name_like_sql(company_name)
-    mk_sql, mk_param = _market_filter(market)
+    mk_sql, mk_param = _market_filter_names_sql_plain(market)
 
     base = f"""
         WITH X AS (
@@ -1041,7 +1082,7 @@ def _task3_cross_events(engine: Engine, company_name: Optional[str], market, ds:
                         cross_types: List[str], mode: str,
                         short_win: int = 50, long_win: int = 200) -> Dict[str, Any]:
     nm_sql, nm_param = _name_like_sql(company_name)
-    mk_sql, mk_param = _market_filter(market)
+    mk_sql, mk_param = _market_filter_names_sql_plain(market)
 
     base = f"""
         WITH MA AS (
@@ -1104,7 +1145,7 @@ def _task3_cross_events(engine: Engine, company_name: Optional[str], market, ds:
 def _task3_rsi(engine: Engine, company_name: Optional[str], market, ds: date, de: date,
                threshold: float, condition: str, mode: str, period: int = 14) -> Dict[str, Any]:
     nm_sql, nm_param = _name_like_sql(company_name)
-    mk_sql, mk_param = _market_filter(market)
+    mk_sql, mk_param = _market_filter_names_sql_plain(market)
 
     base = f"""
         WITH D AS (
@@ -1173,7 +1214,7 @@ def _task3_rsi(engine: Engine, company_name: Optional[str], market, ds: date, de
 def _task3_bollinger(engine: Engine, company_name: Optional[str], market, ds: date, de: date,
                      band: str, touch: bool, mode: str, period: int = 20, k: float = 2.0) -> Dict[str, Any]:
     nm_sql, nm_param = _name_like_sql(company_name)
-    mk_sql, mk_param = _market_filter(market)
+    mk_sql, mk_param = _market_filter_names_sql_plain(market)
 
     base = f"""
         WITH B AS (
@@ -1359,3 +1400,194 @@ def rewrite_query_with_human_feedback(state: State) -> Dict[str, Any]:
         "human_question": None,
         "question": [],   # UI용 질문 표시 필드 초기화
     }
+
+def _load_company_aliases() -> List[Dict[str, str]]:
+    """
+    입력 CSV: 종목코드,종목명,시장구분
+    출력 레코드: {alias, official, ticker, market} (alias를 여러 개로 explode)
+    """
+    global _COMPANY_ALIASES
+    if _COMPANY_ALIASES:
+        return _COMPANY_ALIASES
+    if not COMPANY_CSV.exists():
+        return []
+
+    rows = []
+    with COMPANY_CSV.open("r", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            code   = (r.get("종목코드") or "").strip()
+            name   = (r.get("종목명") or "").strip()
+            market = (r.get("시장구분") or "").strip()  # KOSPI/KOSDAQ
+
+            if not code or not name:
+                continue
+
+            # 대표명
+            aliases = {name, code}
+
+            # 공백/특수문자 제거 변형
+            compact = re.sub(r"\s+", "", name)
+            aliases.add(compact)
+
+            # 우/1우/2우B 등의 괄호/공백 변형(간단 처리)
+            simple = re.sub(r"[\(\) ]+", "", name)
+            aliases.add(simple)
+
+            # 자주 쓰는 별칭 seed 추가(원하면 확장)
+            builtin = {
+                "삼전": "삼성전자", "하닉": "SK하이닉스", "엘지화학": "LG화학", "엘지전자": "LG전자"
+            }
+            if name in builtin.values():
+                for k, v in builtin.items():
+                    if v == name:
+                        aliases.add(k)
+
+            for al in aliases:
+                rows.append({"alias": al, "official": name, "ticker": code, "market": market})
+
+    _COMPANY_ALIASES = rows
+    return rows
+
+def _load_term_rules() -> List[Dict[str, str]]:
+    """
+    입력: type,canonical_name,alias,description
+    출력: {slang, canonical, rewrite}
+    - alias는 ';'로 분리하여 여러 줄로 확장
+    - rewrite는 description이 있으면 그걸, 없으면 canonical_name
+    """
+    global _TERM_RULES
+    if _TERM_RULES:
+        return _TERM_RULES
+    if not TERMS_CSV.exists():
+        return []
+
+    out = []
+    with TERMS_CSV.open("r", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            canonical = (r.get("canonical_name") or "").strip()
+            desc      = (r.get("description") or "").strip()
+            alias_raw = (r.get("alias") or "").strip()
+            if not alias_raw:
+                continue
+            rewrite = desc or canonical or ""
+            for slang in [a.strip() for a in alias_raw.split(";") if a.strip()]:
+                out.append({"slang": slang, "canonical": canonical, "rewrite": rewrite})
+    _TERM_RULES = out
+    return out
+# ─────────────────────────────────────────────────────────────
+# 회사명 퍼지 매칭
+
+def fuzzy_match_company_name(name: str, limit: int = 5) -> List[Tuple[str, float, Dict[str, str]]]:
+    """
+    입력 문자열 name에 대해 company_name.csv의 alias를 기준으로 퍼지 후보를 반환.
+    return: [(official, score, meta_dict), ...]  (score: 0~100)
+    """
+    aliases = _load_company_aliases()
+    if not aliases:
+        return []
+
+    alias_list = [r["alias"] for r in aliases]
+
+    if _HAS_RAPIDFUZZ:
+        matches = rf_process.extract(
+            name, alias_list, scorer=rf_fuzz.WRatio, limit=limit
+        )
+        # matches: [(matched_alias, score, index), ...]
+        out: List[Tuple[str, float, Dict[str, str]]] = []
+        for alias_text, score, idx in matches:
+            meta = aliases[idx]
+            out.append((meta["official"], float(score), meta))
+        return out
+    else:
+        # difflib 폴백
+        close = difflib.get_close_matches(name, alias_list, n=limit, cutoff=0.0)
+        out: List[Tuple[str, float, Dict[str, str]]] = []
+        for alias_text in close:
+            idx = alias_list.index(alias_text)
+            meta = aliases[idx]
+            # 대략적 점수(간이) : 길이 차감
+            score = 100.0 * (1.0 - (abs(len(alias_text) - len(name)) / max(1, len(alias_text))))
+            out.append((meta["official"], float(score), meta))
+        return out
+
+def normalize_company_in_text(text: str, score_threshold: float = 70.0) -> Tuple[str, Optional[str], Optional[str]]:
+    """
+    문장 내 회사명(애칭/오타)을 퍼지 매칭해 공식명으로 치환.
+    return: (replaced_text, official_name_or_None, market_or_None)
+    """
+    aliases = _load_company_aliases()
+    if not aliases:
+        return text, None, None
+
+    tokens = re.findall(r"[가-힣A-Za-z0-9_]+", text)
+    replaced = text
+    best_official: Optional[str] = None
+    best_market: Optional[str] = None
+
+    # 긴 토큰부터 시도 (부분 치환 방지)
+    for tok in sorted(set(tokens), key=len, reverse=True):
+        cands = fuzzy_match_company_name(tok, limit=1)
+        if not cands:
+            continue
+        official, score, meta = cands[0]
+        if score >= score_threshold:
+            # 한글/영문/숫자 경계 안전 치환
+            pattern = rf"(?<![가-힣A-Za-z0-9_]){re.escape(tok)}(?![가-힣A-Za-z0-9_])"
+            replaced = re.sub(pattern, official, replaced)
+            if not best_official:
+                best_official = official
+                best_market = meta.get("market") or None
+
+    return replaced, best_official, best_market
+
+# ─────────────────────────────────────────────────────────────
+# 용어 정규화 (적삼병 등)
+
+def normalize_terms_in_text(text: str) -> Tuple[str, List[Dict[str, str]]]:
+    """
+    stock_terms.csv 기반으로 문장 내 용어를 표준 라벨/치환문으로 정규화.
+    return: (치환된문장, [{slang, canonical, rewrite_used}, ...])
+    """
+    rules = _load_term_rules()
+    if not rules:
+        return text, []
+
+    applied: List[Dict[str, str]] = []
+    replaced = text
+    for r in rules:
+        slang = r["slang"]
+        canonical = r["canonical"]
+        rewrite = r["rewrite"] or canonical
+        # 부분 일치 허용(단, 과치환 방지 위해 긴 것부터)
+        if slang and slang in replaced:
+            replaced = replaced.replace(slang, rewrite)
+            applied.append({"slang": slang, "canonical": canonical, "rewrite_used": rewrite})
+    return replaced, applied
+
+# ─────────────────────────────────────────────────────────────
+# 모호성 해소 → 메시지/필드 업데이트
+
+def apply_ambiguity_resolution(raw_text: str) -> Dict[str, Any]:
+    """
+    1) 회사명 정규화
+    2) 용어 정규화
+    3) 정규화한 문장/필드를 반환 (state.update에 그대로 사용 가능)
+    """
+    after_company, official, market = normalize_company_in_text(raw_text)
+    after_terms, term_hits = normalize_terms_in_text(after_company)
+
+    update: Dict[str, Any] = {
+        "normalized_query": after_terms,
+        "term_hits": term_hits,  # 디버그/트레이스용
+    }
+    clarified_fields: Dict[str, Any] = {}
+    if official:
+        clarified_fields["company_name"] = official
+    if market:
+        # 이미 사용자가 market 지정했을 수 있으니 '힌트'로
+        clarified_fields.setdefault("market_hint", market)
+
+    if clarified_fields:
+        update["clarified_fields"] = clarified_fields
+
+    return update

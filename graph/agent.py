@@ -15,7 +15,8 @@ from utils import (parse_tool_json,
                     run_task1_query, 
                     run_task2_query, 
                     run_task3_query,
-                    rewrite_query_with_human_feedback)
+                    rewrite_query_with_human_feedback,
+                    apply_ambiguity_resolution,)
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
@@ -207,7 +208,60 @@ def rewrite_query(state: State) -> Command[Literal["task_classifier"]]:
     update = rewrite_query_with_human_feedback(state)
     return Command(goto="task_classifier", update=update)
 
-def ambiguity
+def ambiguity_handler(state: State) -> Command[Literal["task1", "task2", "task3", "asking_to_human"]]:
+    last = state["messages"][-1]
+    query_text = getattr(last, "content", "")
+
+    upd = apply_ambiguity_resolution(query_text)
+    new_state = {"normalized_query": upd.get("normalized_query")}
+    if "clarified_fields" in upd:
+        prev = state.get("clarified_fields") or {}
+        merged = {**prev, **upd["clarified_fields"]}
+        new_state["clarified_fields"] = merged
+    if "term_hits" in upd:
+        new_state["term_hits"] = upd["term_hits"]
+    
+    task_name = state.get("task_name")
+    task_obj  = state.get("task")
+    
+    def _has(v): return v is not None and v != "" and v != []
+
+    if task_name == "Task3":
+        # 최소: 기간 + 신호 표현(정규화된 문장에 패턴/지표 단어가 들어가거나 term_hits 존재)
+        has_period = _has(getattr(task_obj, "period_start", None)) or _has(getattr(task_obj, "period_end", None))
+        has_signal = bool(new_state.get("term_hits"))
+        if has_period and has_signal:
+            # 바로 task3 실행
+            return Command(goto="task3", update=new_state)
+        else:
+            # 사람에게 물어볼 질문 제안
+            q = []
+            if not has_period:
+                q.append("기간(예: 2024-01-01~2024-12-31)")
+            if not has_signal:
+                q.append("신호 종류(예: RSI 과매수/볼린저 상단 터치/골든크로스 등)")
+            ask = "분석을 위해 추가 정보가 필요합니다. " + " / ".join(q) + " 를 알려주세요."
+            return Command(goto="asking_to_human", update={**new_state, "human_question": ask, "ask_human": False})
+
+    elif task_name == "Task2":
+        has_date = _has(getattr(task_obj, "date", None))
+        has_clauses = _has(getattr(task_obj, "clauses", None))
+        if has_date and has_clauses:
+            return Command(goto="task2", update=new_state)
+        else:
+            ask = "조건 검색을 위해 날짜와 조건(등락률/거래량 등)을 구체화해 주세요. 예: 2025-06-13, 등락률 ≥ 7%, 거래량 전일 대비 ≥ 300%."
+            return Command(goto="asking_to_human", update={**new_state, "human_question": ask, "ask_human": False})
+
+    elif task_name == "Task1":
+        has_date = _has(getattr(task_obj, "date", None))
+        if has_date:
+            return Command(goto="task1", update=new_state)
+        else:
+            ask = "조회할 날짜(또는 기간)를 알려주세요. 예: 2025-01-21."
+            return Command(goto="asking_to_human", update={**new_state, "human_question": ask, "ask_human": False})
+
+    # 혹시 모르면 사람에게
+    return Command(goto="asking_to_human", update={**new_state, "human_question": "원하시는 조건을 조금 더 구체적으로 알려주세요.", "ask_human": False})
 
 
 init_state = {
