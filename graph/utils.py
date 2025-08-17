@@ -1599,3 +1599,177 @@ def apply_ambiguity_resolution(raw_text: str) -> Dict[str, Any]:
         update["clarified_fields"] = clarified_fields
 
     return update
+
+def _pick_best_result(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    # 우선순위 키 후보
+    for k in ["task3_result", "task2_result", "task1_result", "result", "last_result", "final_result"]:
+        v = state.get(k)
+        if isinstance(v, dict) and ("status" in v or "rows" in v):
+            return v
+    # 그래도 없으면 state의 dict 값 뒤에서 앞으로 스캔
+    for _, v in list(state.items())[::-1]:
+        if isinstance(v, dict) and ("status" in v or "rows" in v):
+            return v
+    return None
+
+def _fmt_num(x: Any) -> str:
+    try:
+        if isinstance(x, int):
+            return f"{x:,}"
+        return f"{float(x):,.2f}"
+    except Exception:
+        return str(x)
+
+# ===== Task1 렌더러 =====
+def _r_task1_metric_rank(r: Dict[str, Any]) -> str:
+    metric, rank_type, dt = r.get("metric"), r.get("rank_type"), r.get("date")
+    rows = r.get("rows", [])[:10]
+    head = f"{dt} 기준 {metric} {'상위' if rank_type=='top' else '하위'} 종목:"
+    body = [f"  {i}. {row.get('name')} — {_fmt_num(row.get('value'))}" for i, row in enumerate(rows, 1)]
+    return "\n".join([head] + body)
+
+def _r_task1_market_comparison(r: Dict[str, Any]) -> str:
+    metric, cmpk, dt = r.get("metric"), r.get("comparison"), r.get("date")
+    cmp_txt = "시장 평균 이상" if cmpk == "above_avg" else "시장 평균 이하"
+    avgv = r.get("market_avg")
+    rows = r.get("rows", [])[:10]
+    head = f"{dt} {metric} {cmp_txt} 종목 (시장 평균: {_fmt_num(avgv)}):"
+    body = [f"  {i}. {row.get('name')} — {_fmt_num(row.get('value'))}" for i, row in enumerate(rows, 1)]
+    return "\n".join([head] + body)
+
+def _r_task1_stock_comparison(r: Dict[str, Any]) -> str:
+    metric, dt = r.get("metric"), r.get("date")
+    a, b = r.get("stock_a"), r.get("stock_b")
+    rows = r.get("rows", [])
+    a_val = next((x.get("value") for x in rows if x.get("which")=="A"), None)
+    b_val = next((x.get("value") for x in rows if x.get("which")=="B"), None)
+    winner = r.get("winner")
+    wtxt = {"A": a, "B": b, "tie": "동일"}.get(winner, None)
+    lines = [f"{dt} {metric} 비교: {a} vs {b}",
+             f"{a}: {_fmt_num(a_val)} / {b}: {_fmt_num(b_val)}"]
+    if wtxt: lines.append(f"→ 우위: {wtxt}")
+    return "\n".join(lines)
+
+def _r_task1_simple_lookup(r: Dict[str, Any]) -> str:
+    metric, comp, dt = r.get("metric"), r.get("company_name"), r.get("date")
+    rows = r.get("rows", [])
+    if not rows:
+        return f"{dt} {comp}의 {metric} 데이터를 찾지 못했습니다."
+    head = f"{dt} {comp} {metric}:"
+    body = [f"  - {row.get('name')}: {_fmt_num(row.get('value'))}" for row in rows]
+    return "\n".join([head] + body)
+
+def _r_task1_stock_rank(r: Dict[str, Any]) -> str:
+    metric, comp, dt = r.get("metric"), r.get("company_name"), r.get("date")
+    rows = r.get("rows", [])
+    if not rows:
+        return f"{dt} {comp}의 {metric} 순위를 찾지 못했습니다."
+    head = f"{dt} {comp} {metric} 순위:"
+    body = [f"  - {row.get('name')}: {_fmt_num(row.get('value'))} (순위 {row.get('rnk')})" for row in rows]
+    return "\n".join([head] + body)
+
+def _r_task1_stock_to_market_ratio(r: Dict[str, Any]) -> str:
+    comp, dt = r.get("company_name"), r.get("date")
+    mv, sv, pct = r.get("market_volume"), r.get("stock_volume"), r.get("ratio_pct")
+    return (f"{dt} 기준 {comp} 거래량 시장점유\n"
+            f"  - 종목 거래량: {_fmt_num(sv)} / 시장 전체: {_fmt_num(mv)}\n"
+            f"  - 비중: {_fmt_num(pct)}%")
+
+def _r_task1_market_index_comparison(r: Dict[str, Any]) -> str:
+    metric, dt = r.get("metric"), r.get("date")
+    rows = r.get("rows", [])
+    head = f"{dt} 지수 비교({metric}):"
+    body = [f"  - {row.get('name')}: {_fmt_num(row.get('value'))}" for row in rows]
+    return "\n".join([head] + body)
+
+# ===== Task2 렌더러 =====
+def _describe_task2_clauses(clauses: List[Dict[str, Any]]) -> str:
+    parts = []
+    for c in clauses or []:
+        t = c.get("type")
+        if t == "pct":
+            parts.append(f"등락률 {c.get('op')} {c.get('value_pct')}%")
+        elif t == "vol_pct":
+            parts.append(f"거래량 변화율 {c.get('op')} {c.get('value_pct')}%")
+        elif t == "vol_abs":
+            parts.append(f"거래량 {c.get('op')} {c.get('shares'):,}주")
+        elif t == "price_range":
+            lo, hi = c.get("low"), c.get("high")
+            if lo is not None and hi is not None:
+                parts.append(f"종가 {lo}~{hi}")
+            elif lo is not None:
+                parts.append(f"종가 ≥ {lo}")
+            elif hi is not None:
+                parts.append(f"종가 ≤ {hi}")
+    return ", ".join(parts)
+
+def _r_task2(r: Dict[str, Any]) -> str:
+    dt, need_prev = r.get("date"), r.get("need_prev")
+    clauses, rows = r.get("applied_clauses", []), r.get("rows", [])
+    desc = _describe_task2_clauses(clauses)
+    head = f"{dt} 조건검색 결과 ({desc})"
+    if need_prev: head += " — 전일 데이터 활용"
+    n = len(rows)
+    lines = [f"{head}: 총 {n}개"]
+    for row in rows[:15]:
+        base = f"  - {row.get('name')} | 종가 {_fmt_num(row.get('close'))}, 거래량 {_fmt_num(row.get('volume'))}"
+        if row.get("pct_change") is not None:
+            base += f", 등락률 {_fmt_num(row.get('pct_change'))}%"
+        if row.get("vol_pct_change") is not None:
+            base += f", 거래량 변화율 {_fmt_num(row.get('vol_pct_change'))}%"
+        lines.append(base)
+    if n > 15:
+        lines.append(f"  … 외 {n-15}개")
+    return "\n".join(lines)
+
+# ===== Task3 렌더러 =====
+def _r_task3_volume_signal(r: Dict[str, Any]) -> str:
+    ds, de, days, thr = r.get("period_start"), r.get("period_end"), r.get("days"), r.get("change_percent")
+    rows = r.get("rows", [])
+    head = f"{ds}~{de} 거래량 스파이크(최근 {days}일 평균 대비"
+    head += f" ≥ {thr}%):" if thr is not None else "):"
+    lines = [f"{head} 총 {len(rows)}건"]
+    for row in rows[:15]:
+        lines.append(f"  - {row.get('trade_date')} {row.get('name')} | 거래량 {_fmt_num(row.get('volume'))}, 변화율 {_fmt_num(row.get('vol_spike_pct'))}%")
+    return "\n".join(lines)
+
+def _r_task3_moving_average_diff(r: Dict[str, Any]) -> str:
+    ds, de, period, diffp, direction = r.get("period_start"), r.get("period_end"), r.get("period"), r.get("diff_percentage"), r.get("direction")
+    rows = r.get("rows", [])
+    dir_txt = "상단 이탈" if direction == "above" else "하단 이탈"
+    head = f"{ds}~{de} {period}일 SMA 대비 괴리 {diffp}% {dir_txt}: 총 {len(rows)}건"
+    body = [f"  - {row.get('trade_date')} {row.get('name')} | 종가 {_fmt_num(row.get('close'))}, 괴리 {_fmt_num(row.get('pct_diff'))}%"
+            for row in rows[:15]]
+    return "\n".join([head] + body)
+
+def _r_task3_cross_events(r: Dict[str, Any]) -> str:
+    ds, de, cts = r.get("period_start"), r.get("period_end"), r.get("cross_types", [])
+    rows = r.get("rows", [])
+    head = f"{ds}~{de} 이동평균 크로스 이벤트({', '.join(cts) or '전체'}): 총 {len(rows)}건"
+    body = [f"  - {row.get('trade_date')} {row.get('name')} | {row.get('cross_type')}" for row in rows[:15]]
+    return "\n".join([head] + body)
+
+def _r_task3_rsi(r: Dict[str, Any]) -> str:
+    ds, de, thr, cond = r.get("period_start"), r.get("period_end"), r.get("threshold"), r.get("condition")
+    cond_txt = "과매수" if cond == "overbought" else "과매도"
+    rows = r.get("rows", [])
+    head = f"{ds}~{de} RSI {thr} 기준 {cond_txt}: 총 {len(rows)}건"
+    body = [f"  - {row.get('trade_date')} {row.get('name')} | RSI {_fmt_num(row.get('rsi'))}" for row in rows[:15]]
+    return "\n".join([head] + body)
+
+def _r_task3_bollinger(r: Dict[str, Any]) -> str:
+    ds, de, band, touch = r.get("period_start"), r.get("period_end"), r.get("band"), r.get("touch")
+    rows = r.get("rows", [])
+    touch_txt = "터치" if touch else "밴드 계산"
+    head = f"{ds}~{de} 볼린저밴드 {band} {touch_txt}: 총 {len(rows)}건"
+    body = [f"  - {row.get('trade_date')} {row.get('name')} | 종가 {_fmt_num(row.get('close'))}" for row in rows[:15]]
+    return "\n".join([head] + body)
+
+def _r_task3(r: Dict[str, Any]) -> str:
+    t = r.get("type")
+    if t == "volume_signal":     return _r_task3_volume_signal(r)
+    if t == "moving_average_diff": return _r_task3_moving_average_diff(r)
+    if t == "cross_events":      return _r_task3_cross_events(r)
+    if t == "rsi":               return _r_task3_rsi(r)
+    if t == "bollinger_band":    return _r_task3_bollinger(r)
+    return "시그널 결과를 렌더링할 수 없습니다."

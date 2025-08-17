@@ -6,7 +6,7 @@ from typing import (
     Literal,
     NotRequired,
 )
-from typing_extensions import Annotated, TypedDict
+from typing_extensions import Annotated, TypedDict, Dict, Any
 from pydantic import BaseModel, Field
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -141,8 +141,19 @@ class Task3(BaseModel):
 class State(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
     task: BaseModel
-    answer: Annotated[List, operator.add]
+    answer: Annotated[List[str], operator.add]
     task_name: str
     ask_human: NotRequired[bool]
     human_question: NotRequired[Optional[str]]
     question: List[str]
+    normalized_query: NotRequired[Optional[str]]
+    clarified_fields: NotRequired[Dict[str, Any]]
+    term_hits: NotRequired[List[Dict[str, str]]]
+
+    # 각 Task 쿼리 실행 결과(옵션)
+    task1_result: NotRequired[Dict[str, Any]]
+    task2_result: NotRequired[Dict[str, Any]]
+    task3_result: NotRequired[Dict[str, Any]]
+
+    # llm_answer가 마지막에 넣어주는 통합 result(옵션)
+    result: NotRequired[Dict[str, Any]]

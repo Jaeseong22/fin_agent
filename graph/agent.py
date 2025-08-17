@@ -16,10 +16,21 @@ from utils import (parse_tool_json,
                     run_task2_query, 
                     run_task3_query,
                     rewrite_query_with_human_feedback,
-                    apply_ambiguity_resolution,)
+                    apply_ambiguity_resolution,
+                    _pick_best_result,
+                    _r_task1_market_comparison,
+                    _r_task1_market_index_comparison,
+                    _r_task1_metric_rank,
+                    _r_task1_simple_lookup,
+                    _r_task1_stock_comparison,
+                    _r_task1_stock_rank,
+                    _r_task1_stock_to_market_ratio,
+                    _r_task2,
+                    _r_task3)
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
+from langgraph.graph import END
 from langsmith import Client
 
 client = Client(api_key=os.environ.get("LANGSMITH_API_KEY"))
@@ -159,17 +170,17 @@ def db_check(state: State) -> Command[Literal["task1", "task2", "task3", "ambigu
 def task1(state: State) -> Command[Literal["llm_answer"]]:
     task_obj = state["task"]
     result = run_task1_query(task_obj, ENGINE)
-    return Command(goto="llm_answer", update={"answer": [result]})
+    return Command(goto="llm_answer", update={"task1_result": result})
 
 def task2(state: State) -> Command[Literal["llm_answer"]]:
     task_obj = state["task"]
     result = run_task2_query(task_obj, ENGINE)
-    return Command(goto="llm_answer", update={"answer": [result]})
+    return Command(goto="llm_answer", update={"task2_result": result})
 
 def task3(state: State) -> Command[Literal["llm_answer"]]:
     task_obj = state["task"]
     result = run_task3_query(task_obj, ENGINE)
-    return Command(goto="llm_answer", update={"answer": [result]})
+    return Command(goto="llm_answer", update={"task3_result": result})
 
 def asking_to_human(state: State) -> Command[Literal["await_human", "emit_question"]]:
     asked = state.get("ask_human", False)
@@ -262,6 +273,65 @@ def ambiguity_handler(state: State) -> Command[Literal["task1", "task2", "task3"
 
     # 혹시 모르면 사람에게
     return Command(goto="asking_to_human", update={**new_state, "human_question": "원하시는 조건을 조금 더 구체적으로 알려주세요.", "ask_human": False})
+
+def llm_answer(state: State) -> Command[END]:
+    """
+    - state에서 최신 결과(dict)를 고르고
+    - 유형별 자연어 요약 생성
+    - END로 종료
+    """
+    result = _pick_best_result(state or {})
+    if not isinstance(result, dict):
+        # chatbot 경로에서 이미 answer가 들어온 경우는 바로 종료
+        if state.get("answer"):
+            return Command(END)
+        return Command(END, update={"answer": ["결과가 없어 답변을 생성하지 못했습니다."]})
+
+    status = result.get("status", "ok")
+    if status != "ok":
+        reason = result.get("reason") or "오류가 발생했습니다."
+        return Command(END, update={"answer": [f"요청을 처리하지 못했습니다. 사유: {reason}"], "result": result})
+
+    rtype = result.get("type")
+    if rtype in {
+        "metric_rank", "market_comparison", "stock_comparison",
+        "simple_lookup", "stock_rank", "stock_to_market_ratio",
+        "market_index_comparison"
+    }:
+        if rtype == "metric_rank":
+            answer = _r_task1_metric_rank(result)
+        elif rtype == "market_comparison":
+            answer = _r_task1_market_comparison(result)
+        elif rtype == "stock_comparison":
+            answer = _r_task1_stock_comparison(result)
+        elif rtype == "simple_lookup":
+            answer = _r_task1_simple_lookup(result)
+        elif rtype == "stock_rank":
+            answer = _r_task1_stock_rank(result)
+        elif rtype == "stock_to_market_ratio":
+            answer = _r_task1_stock_to_market_ratio(result)
+        elif rtype == "market_index_comparison":
+            answer = _r_task1_market_index_comparison(result)
+        else:
+            answer = "알 수 없는 Task1 결과 유형입니다."
+    else:
+        if "applied_clauses" in result:       # Task2
+            answer = _r_task2(result)
+        elif result.get("period_start") and result.get("period_end"):  # Task3
+            answer = _r_task3(result)
+        else:
+            rows = result.get("rows", [])
+            answer = f"결과 {len(rows)}건이 조회되었습니다."
+            if rows:
+                sample = rows[:5]
+                bullets = [f"  - {s.get('trade_date','')} {s.get('name','')}" for s in sample]
+                answer += "\n예시:\n" + "\n".join(bullets)
+
+    nq = state.get("normalized_query")
+    if nq:
+        answer = f"질의: {nq}\n\n" + answer
+
+    return Command(END, update={"answer": [answer], "result": result})
 
 
 init_state = {
