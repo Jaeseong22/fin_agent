@@ -4,6 +4,7 @@ from typing import (
     Union,
     Optional,
     Literal,
+    NotRequired,
 )
 from typing_extensions import Annotated, TypedDict
 from pydantic import BaseModel, Field
@@ -137,9 +138,11 @@ class Task3(BaseModel):
     signal_type: Optional[List[SignalClause]] = Field(default=None, description="기술적 조건 (단일 또는 배열 입력 가능)")
     mode: Optional[Literal["count", "list", "both"]] = Field(default="list", description="조회 모드 (개수, 목록, 둘 다)")
 # ---------- 상태 정의 ----------
-
 class State(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
     task: BaseModel
     answer: Annotated[List, operator.add]
     task_name: str
+    ask_human: NotRequired[bool]
+    human_question: NotRequired[Optional[str]]
+    question: List[str]
