@@ -150,35 +150,35 @@ def _market_filter_names_sql(alias: str, market: Optional[Union[str, List[str]]]
     if not markets:
         return "", {}
     aliases = _load_company_aliases()
-    # official(정식명) 기준으로 시장 묶기
     names = {a["official"] for a in aliases if a.get("market") in markets}
     if not names:
         return "", {}
-    # IN (:n0, :n1, ...)
     params = {}
     keys = []
     for i, nm in enumerate(sorted(names)):
         k = f"nm{i}"
         keys.append(f":{k}")
         params[k] = nm
-    cond = f" AND {alias}.name IN ({', '.join(keys)}) "
+    cond = f" AND {alias}.official_name IN ({', '.join(keys)}) "
     return cond, params
 
-def _market_filter_names_sql_plain(market: Optional[Union[str, List[str]]]) -> Tuple[str, Dict[str, Any]]:
+def _market_filter_names_sql_plain(market):
     markets = _normalize_market(market)
     if not markets:
         return "", {}
     aliases = _load_company_aliases()
-    names = {a["official"] for a in aliases if a.get("market") in markets}
+    names = sorted({a["official"] for a in aliases if a.get("market") in markets})
     if not names:
         return "", {}
+
     params = {}
     keys = []
-    for i, nm in enumerate(sorted(names)):
+    for i, nm in enumerate(names):
         k = f"nm{i}"
         keys.append(f":{k}")
         params[k] = nm
-    cond = f" AND name IN ({', '.join(keys)}) "
+    # official_name에 인덱스 있음!
+    cond = f" AND official_name IN ({', '.join(keys)}) "
     return cond, params
 
 def _run_exists_query(sql: str, params: Dict[str, Any]) -> bool:
@@ -300,6 +300,7 @@ def check_task1(task: Any) -> bool:
     """
     Task1: 특정 날짜 단순 조회/요약
     요구사항: 제공된 날짜 중 최소 1일 이상 데이터 존재.
+    - 단, 지수 비교 절이 섞여 있으면 시장필터는 무시(지수는 종목 CSV 기반 필터링 대상 아님)
     """
     raw_date = getattr(task, "date", None)
 
@@ -313,7 +314,14 @@ def check_task1(task: Any) -> bool:
     if not dates:
         return False
 
-    market = getattr(task, "market", None)
+    clauses = getattr(task, "clauses", None) or []
+    # 지수 비교 절이 하나라도 있으면 시장필터 미적용
+    has_index_clause = any(
+        isinstance(c, dict) and c.get("type") == "market_index_comparison"
+        for c in clauses
+    )
+
+    market = None if has_index_clause else getattr(task, "market", None)
     return any(_exists_price_on(d, market) for d in dates)
 
 
