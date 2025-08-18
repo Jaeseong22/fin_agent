@@ -942,6 +942,12 @@ def _validate_task2_inputs(task_obj, engine: Engine) -> Tuple[Optional[date], Op
 
     return d, clauses, market, need_prev, prev_d, None
 
+def _vol_pct_expr(alias_today: str = "t", alias_prev: str = "p") -> str:
+    # (t.volume - p.volume) / p.volume * 100, 단 양쪽 모두 SIGNED로 캐스팅
+    return (
+        f"((CAST({alias_today}.volume AS SIGNED) - CAST({alias_prev}.volume AS SIGNED)) "
+        f"/ NULLIF(CAST({alias_prev}.volume AS SIGNED), 0) * 100.0)"
+    )
 
 # 2) SQL 파트 빌더
 def _build_select(need_prev: bool) -> str:
@@ -957,7 +963,7 @@ def _build_select(need_prev: bool) -> str:
     if need_prev:
         base_cols += [
             "((t.close - p.close) / NULLIF(p.close,0) * 100.0) AS pct_change",
-            "((t.volume - p.volume) / NULLIF(p.volume,0) * 100.0) AS vol_pct_change",
+            f"{_vol_pct_expr('t','p')} AS vol_pct_change",
         ]
     return ", ".join(base_cols)
 
@@ -989,7 +995,7 @@ def _handle_vol_pct(cl: dict, idx: int) -> Tuple[str, Dict[str, Any]]:
     if op not in (">=", "<=", ">", "<") or not isinstance(val, (int, float)):
         raise ValueError(f"vol_pct clause 형식 오류: {cl}")
     key = f"volpct_{idx}"
-    return f"( (t.volume - p.volume) / NULLIF(p.volume,0) * 100.0 ) {op} :{key}", {key: float(val)}
+    return f"{_vol_pct_expr('t','p')} {op} :{key}", {key: float(val)}
 
 def _handle_vol_abs(cl: dict, idx: int) -> Tuple[str, Dict[str, Any]]:
     op = cl.get("op"); shares = cl.get("shares")

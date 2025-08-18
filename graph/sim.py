@@ -7,7 +7,7 @@ def main():
     # 그래프 빌드
     graph = build_graph()
 
-    user_query = "2025-01-17에 셀트리온의 거래량 순위는?"
+    user_query = "2024-12-19에 등락률이 -10% 이하인 종목을 모두 보여줘"
     init_state: State = {
         "messages": [HumanMessage(content=user_query)],
         "task": None,
