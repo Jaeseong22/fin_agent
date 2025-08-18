@@ -430,7 +430,7 @@ def _index_names_from_indices(indices: List[str]) -> List[str]:
 # Clause 핸들러
 # ─────────────────────────────────────────────────────────────
 
-def _task1_metric_rank(engine: Engine, d: date, clause: dict) -> Dict[str, Any]:
+def _task1_metric_rank(engine: Engine, d: date, clause: dict, market=None) -> Dict[str, Any]:
     metric = clause["metric"]           # "등락률" | "거래량" | "시가총액" | "종가"
     rank_type = clause["rank_type"]     # "top" | "bottom"
     top_n = int(clause.get("top_n") or 10)
@@ -440,40 +440,49 @@ def _task1_metric_rank(engine: Engine, d: date, clause: dict) -> Dict[str, Any]:
 
     order = "DESC" if rank_type == "top" else "ASC"
 
+    # 시장 필터: alias 없는 쿼리/있는 쿼리 둘 다 대비
+    # - 등락률 쿼리는 t / p alias 사용 → _market_filter_names_sql("t", market)
+    # - 거래량/종가 쿼리는 alias 없음 → _market_filter_names_sql_plain(market)
     if metric == "거래량":
+        mk_sql, mk_params = _market_filter_names_sql_plain(market)
         q = f"""
             SELECT name, volume AS value
             FROM stock_prices
             WHERE trade_date = :d
+            {mk_sql}
             ORDER BY value {order}
             LIMIT :n
         """
-        params = {"d": d, "n": top_n}
+        params = {"d": d, "n": top_n, **mk_params}
 
     elif metric == "종가":
+        mk_sql, mk_params = _market_filter_names_sql_plain(market)
         q = f"""
             SELECT name, close AS value
             FROM stock_prices
             WHERE trade_date = :d
+            {mk_sql}
             ORDER BY value {order}
             LIMIT :n
         """
-        params = {"d": d, "n": top_n}
+        params = {"d": d, "n": top_n, **mk_params}
 
     elif metric == "등락률":
         prev_d = _prev_trade_date(engine, d)
         if not prev_d:
             return {"status": "error", "type": "metric_rank", "reason": "전일 거래일을 찾을 수 없습니다."}
+        mk_sql, mk_params = _market_filter_names_sql("t", market)
         q = f"""
             SELECT t.name, {_pct_change_expr('t','p')} AS value
             FROM stock_prices t
             JOIN stock_prices p
               ON p.name = t.name AND p.trade_date = :prev_d
             WHERE t.trade_date = :d
+            {mk_sql}
             ORDER BY value {order}
             LIMIT :n
         """
-        params = {"d": d, "prev_d": prev_d, "n": top_n}
+        params = {"d": d, "prev_d": prev_d, "n": top_n, **mk_params}
 
     else:
         return {"status": "unsupported", "type": "metric_rank", "reason": f"지원하지 않는 metric: {metric}"}
@@ -554,61 +563,106 @@ def _task1_stock_comparison(engine: Engine, d: date, clause: dict) -> Dict[str, 
     b = clause["stock_b"]
 
     if metric == "시가총액":
-        return {"status": "unsupported", "type": "stock_comparison", "reason": "시가총액 컬럼이 없습니다."}
+        return {
+            "status": "unsupported",
+            "type": "stock_comparison",
+            "reason": "시가총액 컬럼이 없습니다."
+        }
 
-    # 회사명 LIKE 조건
-    nm_sql_a, nm_param_a = _like_company(a)
-    nm_sql_b, nm_param_b = _like_company(b)
+    # 서로 다른 파라미터 키 사용
+    nm_sql_a = " AND t.name LIKE :nm_a "
+    nm_sql_b = " AND t.name LIKE :nm_b "
+    params = {"d": d, "nm_a": f"%{a}%", "nm_b": f"%{b}%"}
+
+    # 정확 일치 우선 정렬(그 다음 값 큰 순)
+    # - 거래량/종가: 값 큰 순
+    # - 등락률: pct 큰 순
+    exact_order_a = "CASE WHEN t.name = :exact_a THEN 0 ELSE 1 END"
+    exact_order_b = "CASE WHEN t.name = :exact_b THEN 0 ELSE 1 END"
+    params.update({"exact_a": a, "exact_b": b})
 
     if metric in ("거래량", "종가"):
         col = "volume" if metric == "거래량" else "close"
         q = f"""
-            SELECT 'A' AS which, name, {col} AS value
-            FROM stock_prices
-            WHERE trade_date = :d {nm_sql_a}
+            SELECT * FROM (
+                SELECT 'A' AS which, t.name, t.{col} AS value
+                FROM stock_prices t
+                WHERE t.trade_date = :d {nm_sql_a}
+                ORDER BY {exact_order_a} ASC, t.{col} DESC
+                LIMIT 1
+            ) A
             UNION ALL
-            SELECT 'B' AS which, name, {col} AS value
-            FROM stock_prices
-            WHERE trade_date = :d {nm_sql_b}
+            SELECT * FROM (
+                SELECT 'B' AS which, t.name, t.{col} AS value
+                FROM stock_prices t
+                WHERE t.trade_date = :d {nm_sql_b}
+                ORDER BY {exact_order_b} ASC, t.{col} DESC
+                LIMIT 1
+            ) B
         """
-        params = {"d": d, **nm_param_a, **nm_param_b}
-
     elif metric == "등락률":
         prev_d = _prev_trade_date(engine, d)
         if not prev_d:
-            return {"status": "error", "type": "stock_comparison", "reason": "전일 거래일을 찾을 수 없습니다."}
+            return {
+                "status": "error",
+                "type": "stock_comparison",
+                "reason": "전일 거래일을 찾을 수 없습니다."
+            }
+        params["prev_d"] = prev_d
+        pct_expr = _pct_change_expr("t", "p")
         q = f"""
-            SELECT 'A' AS which, t.name, {_pct_change_expr('t','p')} AS value
-            FROM stock_prices t
-            JOIN stock_prices p ON p.name = t.name AND p.trade_date = :prev_d
-            WHERE t.trade_date = :d {nm_sql_a}
+            SELECT * FROM (
+                SELECT 'A' AS which, t.name, {pct_expr} AS value
+                FROM stock_prices t
+                JOIN stock_prices p
+                  ON p.name = t.name AND p.trade_date = :prev_d
+                WHERE t.trade_date = :d {nm_sql_a}
+                ORDER BY {exact_order_a} ASC, value DESC
+                LIMIT 1
+            ) A
             UNION ALL
-            SELECT 'B' AS which, t.name, {_pct_change_expr('t','p')} AS value
-            FROM stock_prices t
-            JOIN stock_prices p ON p.name = t.name AND p.trade_date = :prev_d
-            WHERE t.trade_date = :d {nm_sql_b}
+            SELECT * FROM (
+                SELECT 'B' AS which, t.name, {pct_expr} AS value
+                FROM stock_prices t
+                JOIN stock_prices p
+                  ON p.name = t.name AND p.trade_date = :prev_d
+                WHERE t.trade_date = :d {nm_sql_b}
+                ORDER BY {exact_order_b} ASC, value DESC
+                LIMIT 1
+            ) B
         """
-        params = {"d": d, "prev_d": prev_d, **nm_param_a, **nm_param_b}
-
     else:
-        return {"status": "unsupported", "type": "stock_comparison", "reason": f"지원하지 않는 metric: {metric}"}
+        return {
+            "status": "unsupported",
+            "type": "stock_comparison",
+            "reason": f"지원하지 않는 metric: {metric}"
+        }
 
     with engine.connect() as conn:
         rows = [dict(r._mapping) for r in conn.execute(text(q), params)]
 
-    # 간단한 승자 계산 (동점/결측 케이스는 LLM에서 다듬어도 됨)
-    a_vals = [r for r in rows if r["which"] == "A"]
-    b_vals = [r for r in rows if r["which"] == "B"]
+    # 승자 계산
+    a_val = next((r["value"] for r in rows if r.get("which") == "A"), None)
+    b_val = next((r["value"] for r in rows if r.get("which") == "B"), None)
     winner = None
-    if a_vals and b_vals:
-        a_val = a_vals[0]["value"]
-        b_val = b_vals[0]["value"]
-        if a_val is not None and b_val is not None:
-            if metric in ("거래량", "종가", "등락률"):
-                winner = "A" if a_val > b_val else ("B" if b_val > a_val else "tie")
+    if a_val is not None and b_val is not None:
+        if a_val > b_val:
+            winner = "A"
+        elif b_val > a_val:
+            winner = "B"
+        else:
+            winner = "tie"
 
-    return {"status": "ok", "type": "stock_comparison", "metric": metric, "date": d.isoformat(),
-            "stock_a": a, "stock_b": b, "rows": rows, "winner": winner}
+    return {
+        "status": "ok",
+        "type": "stock_comparison",
+        "metric": metric,
+        "date": d.isoformat(),
+        "stock_a": a,
+        "stock_b": b,
+        "rows": rows,
+        "winner": winner
+    }
 
 def _task1_simple_lookup(engine: Engine, d: date, clause: dict) -> Dict[str, Any]:
     company = clause["company_name"]
@@ -805,10 +859,12 @@ def run_task1_query(task_obj, engine: Engine = ENGINE) -> Dict[str, Any]:
 
     clause = clauses[0]
     ctype = clause.get("type")
+    market = getattr(task_obj, "market", None)  # ⬅️ 추가
 
     if ctype == "metric_rank":
-        return _task1_metric_rank(engine, d, clause)
+        return _task1_metric_rank(engine, d, clause, market=market)
     elif ctype == "market_comparison":
+        # (원하면 market_comparison에도 시장 필터 적용 가능하지만, '시장 평균' 의미가 달라질 수 있어 기본은 전체시장)
         return _task1_market_comparison(engine, d, clause)
     elif ctype == "stock_comparison":
         return _task1_stock_comparison(engine, d, clause)
@@ -980,8 +1036,11 @@ def _task3_volume_signal(engine: Engine, company_name: Optional[str], market, ds
     nm_sql, nm_param = _name_like_sql(company_name)
     mk_sql, mk_param = _market_filter_names_sql_plain(market)
 
-    # 직전 N일 평균: ROWS BETWEEN N PRECEDING AND 1 PRECEDING
-    # 오늘 거래량 대비 평균 변화율 계산
+    # 윈도우 평균용 버퍼 범위: 과거 데이터를 충분히 포함
+    # (여유 있게 3N일 또는 최소 60일 권장)
+    buf_days = max(n * 3, 60)
+    ds_buf = ds - timedelta(days=buf_days)
+
     base = f"""
         WITH X AS (
           SELECT
@@ -992,20 +1051,32 @@ def _task3_volume_signal(engine: Engine, company_name: Optional[str], market, ds
               ROWS BETWEEN {n} PRECEDING AND 1 PRECEDING
             ) AS avg_prev_vol
           FROM stock_prices
-          WHERE {_between_sql()} {mk_sql}
+          WHERE trade_date BETWEEN :ds_buf AND :de
+          {mk_sql}
         )
         SELECT
           name, trade_date, volume,
           ((volume / NULLIF(avg_prev_vol,0)) - 1.0) * 100.0 AS vol_spike_pct
         FROM X
-        WHERE avg_prev_vol IS NOT NULL {nm_sql}
+        WHERE avg_prev_vol IS NOT NULL
+          AND trade_date BETWEEN :ds AND :de
+          {nm_sql}
     """
+
     cond = ""
     if change_percent is not None:
         cond = " AND ((volume / NULLIF(avg_prev_vol,0)) - 1.0) * 100.0 >= :thr "
 
-    sql = text(base + cond + _order_limit_sql(mode))
-    params = {"ds": ds, "de": de, **mk_param, **nm_param}
+    # 정렬을 스파이크 내림차순으로 (리스트/보스 모드에만 의미)
+    order_limit = " ORDER BY vol_spike_pct DESC, name ASC LIMIT 5000 " if mode in ("list", "both") else ""
+
+    sql = text(base + cond + order_limit)
+    params = {
+        "ds_buf": ds_buf,
+        "ds": ds,
+        "de": de,
+        **mk_param, **nm_param
+    }
     if change_percent is not None:
         params["thr"] = float(change_percent)
 
@@ -1031,11 +1102,24 @@ def _task3_volume_signal(engine: Engine, company_name: Optional[str], market, ds
 # below: pct_diff <= -diff_percentage
 # SMA는 포함 윈도우(오늘 포함)로 계산
 # ─────────────────────────────────────────────────────────────
-def _task3_moving_average_diff(engine: Engine, company_name: Optional[str], market, ds: date, de: date,
-                               period: int, diff_percentage: float, direction: str, mode: str) -> Dict[str, Any]:
-    n = int(period)
+def _task3_moving_average_diff(
+    engine: Engine,
+    company_name: Optional[str],
+    market,
+    ds: date,
+    de: date,
+    period: int,
+    diff_percentage: float,
+    direction: Optional[str] = None,   # ✅ Optional로
+    mode: str = "list"
+) -> Dict[str, Any]:
+    n = int(period or 20)
+    direction = (direction or "above")  # ✅ 기본값 여기서 보정
+
     nm_sql, nm_param = _name_like_sql(company_name)
     mk_sql, mk_param = _market_filter_names_sql_plain(market)
+
+    buf_start = ds - timedelta(days=max(40, n * 3))
 
     base = f"""
         WITH X AS (
@@ -1047,23 +1131,37 @@ def _task3_moving_average_diff(engine: Engine, company_name: Optional[str], mark
               ROWS BETWEEN {n-1} PRECEDING AND CURRENT ROW
             ) AS sma
           FROM stock_prices
-          WHERE {_between_sql()} {mk_sql}
+          WHERE trade_date BETWEEN :buf_start AND :de
+            {mk_sql}
         )
         SELECT
           name, trade_date, close, sma,
           ((close - sma) / NULLIF(sma,0)) * 100.0 AS pct_diff
         FROM X
-        WHERE sma IS NOT NULL {nm_sql}
+        WHERE sma IS NOT NULL
+          AND trade_date BETWEEN :ds AND :de
+          {nm_sql}
     """
+
     if direction == "above":
         cond = " AND ((close - sma) / NULLIF(sma,0)) * 100.0 >= :thr "
         thr = float(diff_percentage)
-    else:
+        order_clause = " ORDER BY pct_diff DESC, trade_date ASC, name ASC "
+    elif direction == "below":
         cond = " AND ((close - sma) / NULLIF(sma,0)) * 100.0 <= :thr "
-        thr = float(-abs(diff_percentage))
+        thr = -abs(float(diff_percentage))
+        order_clause = " ORDER BY pct_diff ASC, trade_date ASC, name ASC "
+    else:
+        cond = " AND ABS(((close - sma) / NULLIF(sma,0)) * 100.0) >= :thr "
+        thr = abs(float(diff_percentage))
+        # 양방향이면 절댓값 기준 내림차순
+        order_clause = " ORDER BY ABS(pct_diff) DESC, trade_date ASC, name ASC "
 
-    sql = text(base + cond + _order_limit_sql(mode))
-    params = {"ds": ds, "de": de, "thr": thr, **mk_param, **nm_param}
+    # ✅ 이 함수에서는 정렬을 우리가 넣었으므로 LIMIT만 별도 처리
+    limit_clause = " LIMIT 5000 " if mode in ("list", "both") else ""
+
+    sql = text(base + cond + order_clause + limit_clause)
+    params = {"buf_start": buf_start, "ds": ds, "de": de, "thr": thr, **mk_param, **nm_param}
 
     with engine.connect() as conn:
         rows = [dict(r._mapping) for r in conn.execute(sql, params)]
@@ -1086,11 +1184,37 @@ def _task3_moving_average_diff(engine: Engine, company_name: Optional[str], mark
 # golden: 전일 short<=long 이고 오늘 short>long
 # death : 전일 short>=long 이고 오늘 short<long
 # ─────────────────────────────────────────────────────────────
-def _task3_cross_events(engine: Engine, company_name: Optional[str], market, ds: date, de: date,
-                        cross_types: List[str], mode: str,
-                        short_win: int = 50, long_win: int = 200) -> Dict[str, Any]:
+def _task3_cross_events(
+    engine: Engine,
+    company_name: Optional[str],
+    market,
+    ds: date,
+    de: date,
+    cross_types: List[str],
+    mode: str,
+    short_win: int = 5,
+    long_win: int = 20,
+) -> Dict[str, Any]:
     nm_sql, nm_param = _name_like_sql(company_name)
     mk_sql, mk_param = _market_filter_names_sql_plain(market)
+
+    # 장기선/라그 계산용 버퍼
+    buf_start = ds - timedelta(days=max(40, long_win * 3))
+
+    # cross_types 정규화
+    cset = set((cross_types or []))
+    want_golden = ("golden" in cset) or (not cset)  # 비었으면 둘 다 허용
+    want_death  = ("death"  in cset) or (not cset)
+
+    # 조건 블록을 cross_types에 맞춰 구성
+    conds = []
+    # 공통: lag 존재
+    base_ok = "(lag_ma_s IS NOT NULL AND lag_ma_l IS NOT NULL)"
+    if want_golden:
+        conds.append(f"({base_ok} AND lag_ma_s <= lag_ma_l AND ma_s >  ma_l)")
+    if want_death:
+        conds.append(f"({base_ok} AND lag_ma_s >= lag_ma_l AND ma_s <  ma_l)")
+    cross_cond = " OR ".join(conds) if conds else "0"  # 안전장치
 
     base = f"""
         WITH MA AS (
@@ -1105,7 +1229,8 @@ def _task3_cross_events(engine: Engine, company_name: Optional[str], market, ds:
               ROWS BETWEEN {long_win-1} PRECEDING AND CURRENT ROW
             ) AS ma_l
           FROM stock_prices
-          WHERE {_between_sql()} {mk_sql}
+          WHERE trade_date BETWEEN :buf_start AND :de
+            {mk_sql}
         ),
         X AS (
           SELECT
@@ -1115,22 +1240,32 @@ def _task3_cross_events(engine: Engine, company_name: Optional[str], market, ds:
           FROM MA
         )
         SELECT
-          name, trade_date,
+          name,
+          trade_date,
           CASE
-            WHEN lag_ma_s IS NOT NULL AND lag_ma_l IS NOT NULL
-                 AND lag_ma_s <= lag_ma_l AND ma_s > ma_l THEN 'golden'
-            WHEN lag_ma_s IS NOT NULL AND lag_ma_l IS NOT NULL
-                 AND lag_ma_s >= lag_ma_l AND ma_s < ma_l THEN 'death'
+            WHEN {base_ok} AND lag_ma_s <= lag_ma_l AND ma_s >  ma_l THEN 'golden'
+            WHEN {base_ok} AND lag_ma_s >= lag_ma_l AND ma_s <  ma_l THEN 'death'
             ELSE NULL
           END AS cross_type
         FROM X
-        WHERE ma_s IS NOT NULL AND ma_l IS NOT NULL {nm_sql}
+        WHERE ma_s IS NOT NULL
+          AND ma_l IS NOT NULL
+          AND trade_date BETWEEN :ds AND :de
+          {nm_sql}
+          AND ( {cross_cond} )
     """
+
     sql = text(base + _order_limit_sql(mode))
-    params = {"ds": ds, "de": de, **mk_param, **nm_param}
+    params = {
+        "buf_start": buf_start,
+        "ds": ds,
+        "de": de,
+        **mk_param,
+        **nm_param,
+    }
+
     with engine.connect() as conn:
-        rows_all = [dict(r._mapping) for r in conn.execute(sql, params)]
-    rows = [r for r in rows_all if r["cross_type"] in (cross_types or [])]
+        rows = [dict(r._mapping) for r in conn.execute(sql, params)]
 
     payload = _mode_payload(mode, rows)
     return {
@@ -1150,58 +1285,130 @@ def _task3_cross_events(engine: Engine, company_name: Optional[str], market, ds:
 # gain = GREATEST(close - LAG(close), 0), loss = GREATEST(LAG(close)-close, 0)
 # condition: overbought(>=threshold) / oversold(<=100-threshold)
 # ─────────────────────────────────────────────────────────────
-def _task3_rsi(engine: Engine, company_name: Optional[str], market, ds: date, de: date,
-               threshold: float, condition: str, mode: str, period: int = 14) -> Dict[str, Any]:
+def _task3_rsi(
+    engine: Engine,
+    company_name: Optional[str],
+    market,
+    ds: date,
+    de: date,
+    threshold: float,
+    condition: str,
+    mode: str,
+    period: int = 14,
+) -> Dict[str, Any]:
     nm_sql, nm_param = _name_like_sql(company_name)
     mk_sql, mk_param = _market_filter_names_sql_plain(market)
 
-    base = f"""
-        WITH D AS (
+    n = int(period or 14)
+    ds_buf = ds - timedelta(days=max(60, n * 3))
+
+    base_sql = f"""
+        WITH RECURSIVE
+        BASE AS (
           SELECT
             name, trade_date, close,
-            (close - LAG(close) OVER (PARTITION BY name ORDER BY trade_date)) AS chg
+            LAG(close) OVER (PARTITION BY name ORDER BY trade_date) AS prev_close
           FROM stock_prices
-          WHERE {_between_sql()} {mk_sql}
+          WHERE trade_date BETWEEN :ds_buf AND :de
+          {mk_sql}
         ),
-        G AS (
+        D AS (
           SELECT
-            name, trade_date, close,
-            GREATEST(chg, 0) AS gain,
-            GREATEST(-chg, 0) AS loss
+            name,
+            trade_date,
+            close,
+            GREATEST(close - prev_close, 0) AS gain,
+            GREATEST(prev_close - close, 0) AS loss,
+            ROW_NUMBER() OVER (PARTITION BY name ORDER BY trade_date) AS rn
+          FROM BASE
+          WHERE prev_close IS NOT NULL
+        ),
+        SEED AS (
+          SELECT
+            name, trade_date, close, gain, loss, rn,
+            CASE WHEN rn = :n
+              THEN (SUM(gain) OVER (
+                      PARTITION BY name ORDER BY trade_date
+                      ROWS BETWEEN :n_minus1 PRECEDING AND CURRENT ROW
+                    ) / :n)
+            END AS avg_gain,
+            CASE WHEN rn = :n
+              THEN (SUM(loss) OVER (
+                      PARTITION BY name ORDER BY trade_date
+                      ROWS BETWEEN :n_minus1 PRECEDING AND CURRENT ROW
+                    ) / :n)
+            END AS avg_loss
           FROM D
         ),
-        R AS (
+        REC AS (
+          -- 씨앗: rn = n
           SELECT
-            name, trade_date, close,
-            AVG(gain) OVER (
-              PARTITION BY name ORDER BY trade_date
-              ROWS BETWEEN {period-1} PRECEDING AND CURRENT ROW
-            ) AS avg_gain,
-            AVG(loss) OVER (
-              PARTITION BY name ORDER BY trade_date
-              ROWS BETWEEN {period-1} PRECEDING AND CURRENT ROW
-            ) AS avg_loss
-          FROM G
-        )
-        SELECT
-          name, trade_date, close,
-          CASE
-            WHEN avg_loss IS NULL OR avg_gain IS NULL THEN NULL
-            WHEN avg_loss = 0 THEN 100.0
-            ELSE 100.0 - (100.0 / (1.0 + (avg_gain / NULLIF(avg_loss,0))))
-          END AS rsi
-        FROM R
-        WHERE 1=1 {nm_sql}
-    """
-    sql = text(base + _order_limit_sql(mode))
-    params = {"ds": ds, "de": de, **mk_param, **nm_param}
-    with engine.connect() as conn:
-        rows_all = [dict(r._mapping) for r in conn.execute(sql, params)]
+            name, trade_date, close, rn, gain, loss, avg_gain, avg_loss
+          FROM SEED
+          WHERE rn = :n
 
+          UNION ALL
+
+          -- Wilder 누적: 다음 행부터 끝까지
+          SELECT
+            d.name,
+            d.trade_date,
+            d.close,
+            d.rn,
+            d.gain,
+            d.loss,
+            (r.avg_gain * (:n - 1) + d.gain) / :n AS avg_gain,
+            (r.avg_loss * (:n - 1) + d.loss) / :n AS avg_loss
+          FROM REC r
+          JOIN D d
+            ON d.name = r.name
+           AND d.rn   = r.rn + 1
+        ),
+        RSI AS (
+          SELECT
+            name,
+            trade_date,
+            close,
+            CASE
+              WHEN avg_gain IS NULL OR avg_loss IS NULL THEN NULL
+              WHEN avg_gain = 0 AND avg_loss = 0 THEN 50.0
+              WHEN avg_loss = 0 THEN 100.0
+              WHEN avg_gain = 0 THEN 0.0
+              ELSE 100.0 - (100.0 / (1.0 + (avg_gain / NULLIF(avg_loss,0))))
+            END AS rsi
+          FROM REC
+        )
+        SELECT name, trade_date, close, rsi
+        FROM RSI
+        WHERE trade_date BETWEEN :ds AND :de
+        {nm_sql}
+    """
+
+    # 조건/정렬
     if condition == "overbought":
-        rows = [r for r in rows_all if r["rsi"] is not None and r["rsi"] >= float(threshold)]
+        base_sql += " AND rsi IS NOT NULL AND rsi >= :thr "
+        order_sql = " ORDER BY rsi DESC, trade_date DESC, name ASC "
     else:
-        rows = [r for r in rows_all if r["rsi"] is not None and r["rsi"] <= float(100.0 - threshold)]
+        base_sql += " AND rsi IS NOT NULL AND rsi <= :thr "
+        order_sql = " ORDER BY rsi ASC, trade_date DESC, name ASC "
+
+    if mode in ("list", "both"):
+        order_sql += " LIMIT 5000 "
+
+    sql = text(base_sql + order_sql)
+    params = {
+        "ds_buf": ds_buf,
+        "ds": ds,
+        "de": de,
+        "thr": float(threshold),
+        "n": n,
+        "n_minus1": n - 1,
+        **mk_param,
+        **nm_param,
+    }
+
+    with engine.connect() as conn:
+        rows = [dict(r._mapping) for r in conn.execute(sql, params)]
 
     payload = _mode_payload(mode, rows)
     return {
@@ -1211,7 +1418,7 @@ def _task3_rsi(engine: Engine, company_name: Optional[str], market, ds: date, de
         "period_end": de.isoformat(),
         "threshold": threshold,
         "condition": condition,
-        "period": period,
+        "period": n,
         **payload
     }
 
@@ -1219,33 +1426,71 @@ def _task3_rsi(engine: Engine, company_name: Optional[str], market, ds: date, de
 # 시그널: 볼린저 밴드 터치 (기본 20일, 표준편차 k=2)
 # band: upper|lower, touch: True → upper: close>=upper, lower: close<=lower
 # ─────────────────────────────────────────────────────────────
-def _task3_bollinger(engine: Engine, company_name: Optional[str], market, ds: date, de: date,
-                     band: str, touch: bool, mode: str, period: int = 20, k: float = 2.0) -> Dict[str, Any]:
+def _task3_bollinger(
+    engine: Engine,
+    company_name: Optional[str],
+    market,
+    ds: date,
+    de: date,
+    band: str,
+    touch: bool,
+    mode: str,
+    period: int = 20,
+    k: float = 2.0,
+    prefer_adj: bool = True,
+) -> Dict[str, Any]:
     nm_sql, nm_param = _name_like_sql(company_name)
     mk_sql, mk_param = _market_filter_names_sql_plain(market)
+
+    # 윈도우용 버퍼(과거 봉 확보)
+    buf_start = ds - timedelta(days=max(40, period * 3))
+
+    # adj_close 선호, 없으면 close
+    price_col = "adj_close" if prefer_adj else "close"
+    with engine.connect() as conn:
+        cols = {r[0] for r in conn.execute(text("SHOW COLUMNS FROM stock_prices")).fetchall()}
+    if price_col not in cols:
+        price_col = "close"
 
     base = f"""
         WITH B AS (
           SELECT
-            name, trade_date, close,
-            AVG(close) OVER (
+            name,
+            trade_date,
+            {price_col} AS close,
+            AVG({price_col}) OVER (
               PARTITION BY name ORDER BY trade_date
               ROWS BETWEEN {period-1} PRECEDING AND CURRENT ROW
             ) AS ma,
-            STDDEV_SAMP(close) OVER (
+            STDDEV_SAMP({price_col}) OVER (
               PARTITION BY name ORDER BY trade_date
               ROWS BETWEEN {period-1} PRECEDING AND CURRENT ROW
             ) AS sd
           FROM stock_prices
-          WHERE {_between_sql()} {mk_sql}
+          WHERE trade_date BETWEEN :buf_start AND :de
+          {mk_sql}
         )
         SELECT
-          name, trade_date, close, ma, sd,
+          name,
+          trade_date,
+          close,
+          ma,
+          sd,
           (ma + :k * sd) AS upper_band,
-          (ma - :k * sd) AS lower_band
+          (ma - :k * sd) AS lower_band,
+          -- 밴드와의 괴리(정렬용)
+          CASE
+            WHEN :band = 'upper' THEN close - (ma + :k * sd)
+            ELSE (ma - :k * sd) - close
+          END AS band_distance
         FROM B
-        WHERE ma IS NOT NULL AND sd IS NOT NULL {nm_sql}
+        WHERE ma IS NOT NULL
+          AND sd IS NOT NULL
+          AND trade_date BETWEEN :ds AND :de
+          {nm_sql}
     """
+
+    # 터치 조건
     cond = ""
     if touch:
         if band == "upper":
@@ -1253,8 +1498,23 @@ def _task3_bollinger(engine: Engine, company_name: Optional[str], market, ds: da
         else:
             cond = " AND close <= (ma - :k * sd) "
 
-    sql = text(base + cond + _order_limit_sql(mode))
-    params = {"ds": ds, "de": de, "k": float(k), **mk_param, **nm_param}
+    # 정렬/리밋(여기서는 커스텀 정렬 사용: 괴리 큰 순)
+    order_sql = ""
+    if mode in ("list", "both"):
+        # 상단 터치면 band_distance 큰 순(양수 클수록 더 위), 하단 터치면 band_distance 큰 순(양수 클수록 더 아래)
+        # touch가 False여도 괴리 큰 순으로 보여주면 직관적
+        order_sql = " ORDER BY band_distance DESC, trade_date DESC, name ASC LIMIT 5000 "
+
+    sql = text(base + cond + order_sql)
+    params = {
+        "buf_start": buf_start,
+        "ds": ds,
+        "de": de,
+        "k": float(k),
+        "band": band,               # CASE에서 사용
+        **mk_param,
+        **nm_param,
+    }
 
     with engine.connect() as conn:
         rows = [dict(r._mapping) for r in conn.execute(sql, params)]
@@ -1269,6 +1529,7 @@ def _task3_bollinger(engine: Engine, company_name: Optional[str], market, ds: da
         "touch": touch,
         "period": period,
         "k": k,
+        "price_col": price_col,
         **payload
     }
 
@@ -1310,13 +1571,6 @@ def run_task3_query(task_obj, engine: Engine = ENGINE) -> Dict[str, Any]:
             mode=mode
         )
 
-    elif stype == "moving_average_diff":
-        return _task3_moving_average_diff(
-            engine, company_name, market, ds, de,
-            period=int(sig["period"]), diff_percentage=float(sig["diff_percentage"]),
-            direction=sig["direction"], mode=mode
-        )
-
     elif stype == "cross_events":
         return _task3_cross_events(
             engine, company_name, market, ds, de,
@@ -1333,6 +1587,14 @@ def run_task3_query(task_obj, engine: Engine = ENGINE) -> Dict[str, Any]:
         return _task3_bollinger(
             engine, company_name, market, ds, de,
             band=sig["band"], touch=bool(sig["touch"]), mode=mode
+        )
+    elif stype == "moving_average_diff":
+        return _task3_moving_average_diff(
+            engine, company_name, market, ds, de,
+            period=int(sig.get("period") or 20),
+            diff_percentage=float(sig.get("diff_percentage") or 0),
+            direction=(sig.get("direction") or "above"),
+            mode=mode
         )
 
     else:

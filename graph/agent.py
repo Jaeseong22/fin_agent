@@ -284,13 +284,13 @@ def llm_answer(state: State) -> Command[END]:
     if not isinstance(result, dict):
         # chatbot 경로에서 이미 answer가 들어온 경우는 바로 종료
         if state.get("answer"):
-            return Command(END)
-        return Command(END, update={"answer": ["결과가 없어 답변을 생성하지 못했습니다."]})
+            return Command(goto=END)
+        return Command(goto=END, update={"answer": ["결과가 없어 답변을 생성하지 못했습니다."]})
 
     status = result.get("status", "ok")
     if status != "ok":
         reason = result.get("reason") or "오류가 발생했습니다."
-        return Command(END, update={"answer": [f"요청을 처리하지 못했습니다. 사유: {reason}"], "result": result})
+        return Command(goto=END, update={"answer": [f"요청을 처리하지 못했습니다. 사유: {reason}"], "result": result})
 
     rtype = result.get("type")
     if rtype in {
@@ -331,16 +331,5 @@ def llm_answer(state: State) -> Command[END]:
     if nq:
         answer = f"질의: {nq}\n\n" + answer
 
-    return Command(END, update={"answer": [answer], "result": result})
+    return Command(goto=END, update={"answer": [answer], "result": result})
 
-
-init_state = {
-    "messages": [HumanMessage(content="삼전이 적삼병일 때를 알려줘")],
-    "task_name": "Task3",
-    "task": Task3(company_name=None, market=None, period_start="", period_end="",
-                  signal_type=[], mode="list"),
-    "answer": [],            # 필수 초기화
-    "ask_human": False,
-    "human_question": None,
-    "question": [],          # 질문 기록 필드
-}
