@@ -149,36 +149,48 @@ def _market_filter_names_sql(alias: str, market: Optional[Union[str, List[str]]]
     markets = _normalize_market(market)
     if not markets:
         return "", {}
+
     aliases = _load_company_aliases()
-    names = {a["official"] for a in aliases if a.get("market") in markets}
-    if not names:
+    # 해당 시장의 공식명+코드로 stock_prices.name 문자열 생성
+    # ex) "005930_삼성전자"
+    full_names = sorted({f"{a['ticker']}_{a['official']}"
+                         for a in aliases if a.get("market") in markets})
+
+    if not full_names:
         return "", {}
+
     params = {}
     keys = []
-    for i, nm in enumerate(sorted(names)):
+    for i, nm in enumerate(full_names):
         k = f"nm{i}"
         keys.append(f":{k}")
         params[k] = nm
-    cond = f" AND {alias}.official_name IN ({', '.join(keys)}) "
+
+    # ✅ stock_prices.{alias}.name 기준으로 필터링
+    cond = f" AND {alias}.name IN ({', '.join(keys)}) "
     return cond, params
 
 def _market_filter_names_sql_plain(market):
     markets = _normalize_market(market)
     if not markets:
         return "", {}
+
     aliases = _load_company_aliases()
-    names = sorted({a["official"] for a in aliases if a.get("market") in markets})
-    if not names:
+    full_names = sorted({f"{a['ticker']}_{a['official']}"
+                         for a in aliases if a.get("market") in markets})
+
+    if not full_names:
         return "", {}
 
     params = {}
     keys = []
-    for i, nm in enumerate(names):
+    for i, nm in enumerate(full_names):
         k = f"nm{i}"
         keys.append(f":{k}")
         params[k] = nm
-    # official_name에 인덱스 있음!
-    cond = f" AND official_name IN ({', '.join(keys)}) "
+
+    # ✅ stock_prices.name 기준으로 필터링
+    cond = f" AND name IN ({', '.join(keys)}) "
     return cond, params
 
 def _run_exists_query(sql: str, params: Dict[str, Any]) -> bool:
@@ -435,14 +447,8 @@ def _task1_metric_rank(engine: Engine, d: date, clause: dict, market=None) -> Di
     rank_type = clause["rank_type"]     # "top" | "bottom"
     top_n = int(clause.get("top_n") or 10)
 
-    if metric == "시가총액":
-        return {"status": "unsupported", "type": "metric_rank", "reason": "시가총액 컬럼이 없습니다."}
-
     order = "DESC" if rank_type == "top" else "ASC"
 
-    # 시장 필터: alias 없는 쿼리/있는 쿼리 둘 다 대비
-    # - 등락률 쿼리는 t / p alias 사용 → _market_filter_names_sql("t", market)
-    # - 거래량/종가 쿼리는 alias 없음 → _market_filter_names_sql_plain(market)
     if metric == "거래량":
         mk_sql, mk_params = _market_filter_names_sql_plain(market)
         q = f"""
@@ -462,6 +468,19 @@ def _task1_metric_rank(engine: Engine, d: date, clause: dict, market=None) -> Di
             FROM stock_prices
             WHERE trade_date = :d
             {mk_sql}
+            ORDER BY value {order}
+            LIMIT :n
+        """
+        params = {"d": d, "n": top_n, **mk_params}
+
+    elif metric == "시가총액":
+        mk_sql, mk_params = _market_filter_names_sql_plain(market)
+        q = f"""
+            SELECT name, market_cap AS value
+            FROM stock_prices
+            WHERE trade_date = :d
+            {mk_sql}
+              AND market_cap IS NOT NULL
             ORDER BY value {order}
             LIMIT :n
         """
@@ -562,32 +581,33 @@ def _task1_stock_comparison(engine: Engine, d: date, clause: dict) -> Dict[str, 
     a = clause["stock_a"]
     b = clause["stock_b"]
 
-    if metric == "시가총액":
-        return {
-            "status": "unsupported",
-            "type": "stock_comparison",
-            "reason": "시가총액 컬럼이 없습니다."
-        }
-
-    # 서로 다른 파라미터 키 사용
     nm_sql_a = " AND t.name LIKE :nm_a "
     nm_sql_b = " AND t.name LIKE :nm_b "
-    params = {"d": d, "nm_a": f"%{a}%", "nm_b": f"%{b}%"}
+    params = {"d": d, "nm_a": f"%{a}%", "nm_b": f"%{b}%", "exact_a": a, "exact_b": b}
 
-    # 정확 일치 우선 정렬(그 다음 값 큰 순)
-    # - 거래량/종가: 값 큰 순
-    # - 등락률: pct 큰 순
+    # 정확 일치 우선 정렬 절 (두 분기에서 공통으로 사용)
     exact_order_a = "CASE WHEN t.name = :exact_a THEN 0 ELSE 1 END"
     exact_order_b = "CASE WHEN t.name = :exact_b THEN 0 ELSE 1 END"
-    params.update({"exact_a": a, "exact_b": b})
 
-    if metric in ("거래량", "종가"):
-        col = "volume" if metric == "거래량" else "close"
+    if metric == "거래량":
+        col = "volume"
+        null_guard = ""  # volume은 대부분 NOT NULL일 테니 생략
+    elif metric == "종가":
+        col = "close"
+        null_guard = ""
+    elif metric == "시가총액":
+        col = "market_cap"
+        null_guard = " AND t.market_cap IS NOT NULL "
+    else:
+        col = None
+        null_guard = ""
+
+    if col:
         q = f"""
             SELECT * FROM (
                 SELECT 'A' AS which, t.name, t.{col} AS value
                 FROM stock_prices t
-                WHERE t.trade_date = :d {nm_sql_a}
+                WHERE t.trade_date = :d {nm_sql_a} {null_guard}
                 ORDER BY {exact_order_a} ASC, t.{col} DESC
                 LIMIT 1
             ) A
@@ -595,7 +615,7 @@ def _task1_stock_comparison(engine: Engine, d: date, clause: dict) -> Dict[str, 
             SELECT * FROM (
                 SELECT 'B' AS which, t.name, t.{col} AS value
                 FROM stock_prices t
-                WHERE t.trade_date = :d {nm_sql_b}
+                WHERE t.trade_date = :d {nm_sql_b} {null_guard}
                 ORDER BY {exact_order_b} ASC, t.{col} DESC
                 LIMIT 1
             ) B
@@ -641,7 +661,7 @@ def _task1_stock_comparison(engine: Engine, d: date, clause: dict) -> Dict[str, 
     with engine.connect() as conn:
         rows = [dict(r._mapping) for r in conn.execute(text(q), params)]
 
-    # 승자 계산
+    # 승자 계산 (값이 큰 쪽이 우위)
     a_val = next((r["value"] for r in rows if r.get("which") == "A"), None)
     b_val = next((r["value"] for r in rows if r.get("which") == "B"), None)
     winner = None
@@ -666,14 +686,22 @@ def _task1_stock_comparison(engine: Engine, d: date, clause: dict) -> Dict[str, 
 
 def _task1_simple_lookup(engine: Engine, d: date, clause: dict) -> Dict[str, Any]:
     company = clause["company_name"]
-    metric  = clause["metric"]  # "시가" "고가" "저가" "종가" "거래량" "시가총액" "지수" "등락률"
-
-    if metric in ("시가총액", "지수"):
-        return {"status": "unsupported", "type": "simple_lookup", "reason": f"미지원 metric: {metric}"}
+    metric  = clause["metric"]
 
     nm_sql, nm_param = _like_company(company)
 
-    if metric == "등락률":
+    if metric == "시가총액":
+        q = f"""
+            SELECT name, market_cap AS value
+            FROM stock_prices
+            WHERE trade_date = :d {nm_sql}
+              AND market_cap IS NOT NULL
+            ORDER BY value DESC
+            LIMIT 5
+        """
+        params = {"d": d, **nm_param}
+
+    elif metric == "등락률":
         prev_d = _prev_trade_date(engine, d)
         if not prev_d:
             return {"status": "error", "type": "simple_lookup", "reason": "전일 거래일을 찾을 수 없습니다."}
@@ -686,8 +714,11 @@ def _task1_simple_lookup(engine: Engine, d: date, clause: dict) -> Dict[str, Any
             LIMIT 5
         """
         params = {"d": d, "prev_d": prev_d, **nm_param}
+
     else:
         col_map = {"시가": "open", "고가": "high", "저가": "low", "종가": "close", "거래량": "volume"}
+        if metric not in col_map:
+            return {"status": "unsupported", "type": "simple_lookup", "reason": f"지원하지 않는 metric: {metric}"}
         col = col_map[metric]
         q = f"""
             SELECT name, {col} AS value
@@ -705,15 +736,26 @@ def _task1_simple_lookup(engine: Engine, d: date, clause: dict) -> Dict[str, Any
 
 def _task1_stock_rank(engine: Engine, d: date, clause: dict) -> Dict[str, Any]:
     company = clause["company_name"]
-    metric  = clause["metric"]  # "등락률" | "거래량" | "시가총액"
-
-    if metric == "시가총액":
-        return {"status": "unsupported", "type": "stock_rank", "reason": "시가총액 컬럼이 없습니다."}
-
+    metric  = clause["metric"]
     nm_sql, nm_param = _like_company(company)
 
-    if metric == "거래량":
-        q = """
+    if metric == "시가총액":
+        q = f"""
+            WITH T AS (
+                SELECT name, market_cap AS val,
+                       DENSE_RANK() OVER (ORDER BY market_cap DESC) AS rnk
+                FROM stock_prices
+                WHERE trade_date = :d AND market_cap IS NOT NULL
+            )
+            SELECT name, val AS value, rnk
+            FROM T
+            WHERE 1=1 {nm_sql}
+            LIMIT 5
+        """
+        params = {"d": d, **nm_param}
+
+    elif metric == "거래량":
+        q = f"""
             WITH T AS (
                 SELECT name, volume AS val,
                        DENSE_RANK() OVER (ORDER BY volume DESC) AS rnk
@@ -724,7 +766,7 @@ def _task1_stock_rank(engine: Engine, d: date, clause: dict) -> Dict[str, Any]:
             FROM T
             WHERE 1=1 {nm_sql}
             LIMIT 5
-        """.format(nm_sql=nm_sql)
+        """
         params = {"d": d, **nm_param}
 
     elif metric == "등락률":

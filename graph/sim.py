@@ -7,7 +7,7 @@ def main():
     # 그래프 빌드
     graph = build_graph()
 
-    user_query = "2025-03-27에 삼성전자과 LG화학 중 거래량이 더 높은 종목은?"
+    user_query = "2025-01-17에 셀트리온의 거래량 순위는?"
     init_state: State = {
         "messages": [HumanMessage(content=user_query)],
         "task": None,
