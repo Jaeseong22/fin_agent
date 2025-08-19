@@ -78,7 +78,7 @@ def task_classifier(state: State) -> Command[Literal["query_parsing", "asking_to
                 goto="asking_to_human",
                 update={
                     "ask_human": False,
-                    "human_question": "어떤 관점의 금융 질문인지 구체화해 주세요. 예) 날짜/기간, 시장(KOSPI/KOSDAQ), 전수검색 여부, 신호(예: 이동평균/RSI/거래량 스파이크) 등"
+                    "question": "어떤 관점의 금융 질문인지 구체화해 주세요. 예) 날짜/기간, 시장(KOSPI/KOSDAQ), 전수검색 여부, 신호(예: 이동평균/RSI/거래량 스파이크) 등"
                 }
             ) 
         case "Chatbot":
@@ -187,7 +187,7 @@ def asking_to_human(state: State) -> Command[Literal["await_human", "emit_questi
     if asked:
         return Command(goto="await_human")
     else:
-        q = state.get("human_question") or \
+        q = state.get("question") or \
         "원하시는 조건을 더 구체적으로 알려주세요. 예) 기간, 시장(kospi, kosdaq), 신호 종류 등"
         return Command(goto="emit_question", update={"human_question": q})
     

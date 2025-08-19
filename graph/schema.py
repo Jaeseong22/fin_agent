@@ -140,12 +140,12 @@ class Task3(BaseModel):
 # ---------- 상태 정의 ----------
 class State(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
-    task: BaseModel
-    answer: Annotated[List[str], operator.add]
-    task_name: str
+    task: NotRequired[BaseModel]
+    answer: NotRequired[Annotated[List[str], operator.add]]
+    task_name: NotRequired[str]
     ask_human: NotRequired[bool]
     human_question: NotRequired[Optional[str]]
-    question: List[str]
+    question: NotRequired[List[str]]
     normalized_query: NotRequired[Optional[str]]
     clarified_fields: NotRequired[Dict[str, Any]]
     term_hits: NotRequired[List[Dict[str, str]]]

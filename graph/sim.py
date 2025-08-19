@@ -7,15 +7,10 @@ def main():
     # 그래프 빌드
     graph = build_graph()
 
-    user_query = "2024-12-19에 등락률이 -10% 이하인 종목을 모두 보여줘"
+    user_query = input()
     init_state: State = {
         "messages": [HumanMessage(content=user_query)],
-        "task": None,
-        "answer": [],
-        "task_name": "",
-        "question": [user_query],
     }
-
     # 그래프 실행 (invoke는 동기 실행, 결과 state 반환)
     result_state = graph.invoke(init_state)
 
