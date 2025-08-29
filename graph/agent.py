@@ -29,9 +29,12 @@ from utils import (parse_tool_json,
                     _r_task3)
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 from langgraph.graph import END
 from langsmith import Client
+
+# 맨 위 근처에 상수 추가
+DEFAULT_Q = "원하시는 조건을 더 구체적으로 알려주세요. 예) 기간, 시장(KOSPI/KOSDAQ), 신호 종류 등"
 
 client = Client(api_key=os.environ.get("LANGSMITH_API_KEY"))
 task_classifier_prompt = client.pull_prompt("task_classifier", include_model=True)
@@ -39,7 +42,7 @@ task_classifier_prompt = client.pull_prompt("task_classifier", include_model=Tru
 llm = ChatOpenAI(temperature=0.2, 
                  model="gpt-4o-mini",)
 
-def task_classifier(state: State) -> Command[Literal["query_parsing", "asking_to_human","chatbot"]]:
+def task_classifier(state: State) -> Command[Literal["query_parsing", "ask_human","chatbot"]]:
     messages = state["messages"][-1]
     chain = task_classifier_prompt
     result = chain.invoke({"messages" : messages.content})
@@ -75,9 +78,9 @@ def task_classifier(state: State) -> Command[Literal["query_parsing", "asking_to
                            update={"task": task_instance, "task_name": task})
         case "Task4":
             return Command(
-                goto="asking_to_human",
+                goto="ask_human",
                 update={
-                    "ask_human": False,
+                    "ask_human": True,
                     "human_question": "어떤 관점의 금융 질문인지 구체화해 주세요. 예) 날짜/기간, 시장(KOSPI/KOSDAQ), 전수검색 여부, 신호(예: 이동평균/RSI/거래량 스파이크) 등"
                 }
             ) 
@@ -93,7 +96,7 @@ def chatbot(state: State) -> Command[Literal["llm_answer"]]:
     return Command(goto="llm_answer",
                    update={"answer": [result.content]})
 
-def query_parsing(state: State) -> Command[Literal["db_check", "asking_to_human"]]:
+def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
     messages = state["messages"][-1]
     task = state["task_name"]
     task_obj = state["task"]
@@ -104,13 +107,13 @@ def query_parsing(state: State) -> Command[Literal["db_check", "asking_to_human"
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
-                return Command(goto="asking_to_human")
+                return Command(goto="ask_human")
             payload = data.get("Task1", data)
             try:
                 updated_task = task_obj.model_copy(update=payload)
             except Exception as e:
                 print("parsing validation error:", e)
-                return Command(goto="asking_to_human")
+                return Command(goto="ask_human")
             return Command(goto="db_check", update={"task": updated_task})
         
         case "Task2":
@@ -118,13 +121,13 @@ def query_parsing(state: State) -> Command[Literal["db_check", "asking_to_human"
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
-                return Command(goto="asking_to_human")
+                return Command(goto="ask_human")
             payload = data.get("Task2", data)
             try:
                 updated_task = task_obj.model_copy(update=payload)
             except Exception as e:
                 print("parsing validation error:", e)
-                return Command(goto="asking_to_human")
+                return Command(goto="ask_human")
             return Command(goto="db_check", update={"task": updated_task})
             
         case "Task3":
@@ -132,17 +135,17 @@ def query_parsing(state: State) -> Command[Literal["db_check", "asking_to_human"
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
-                return Command(goto="asking_to_human")
+                return Command(goto="ask_human")
             payload = data.get("Task3", data)
             try:
                 updated_task = task_obj.model_copy(update=payload)
             except Exception as e:
                 print("parsing validation error:", e)
-                return Command(goto="asking_to_human")
+                return Command(goto="ask_human")
             return Command(goto="db_check", update={"task": updated_task})
         
         case _:
-            return Command(goto="asking_to_human")
+            return Command(goto="ask_human")
         
 def db_check(state: State) -> Command[Literal["task1", "task2", "task3", "ambiguity_handler"]]:
     task_class = state["task_name"]
@@ -165,7 +168,7 @@ def db_check(state: State) -> Command[Literal["task1", "task2", "task3", "ambigu
             return Command(goto="task3")
 
         case _:
-            return Command(goto="asking_to_human", update={"ask_human": True})
+            return Command(goto="ask_human", update={"ask_human": True})
         
 def task1(state: State) -> Command[Literal["llm_answer"]]:
     task_obj = state["task"]
@@ -182,44 +185,36 @@ def task3(state: State) -> Command[Literal["llm_answer"]]:
     result = run_task3_query(task_obj, ENGINE)
     return Command(goto="llm_answer", update={"task3_result": result})
 
-def asking_to_human(state: State) -> Command[Literal["await_human", "emit_question"]]:
-    asked = state.get("ask_human", False)
-    if asked:
-        return Command(goto="await_human")
-    else:
-        q = state.get("human_question") or \
-        "원하시는 조건을 더 구체적으로 알려주세요. 예) 기간, 시장(kospi, kosdaq), 신호 종류 등"
-        return Command(goto="emit_question", update={"human_question": q})
-    
-def emit_question(state: State) -> None:
-    """
-    화면에 질문만 출력하고 run을 종료(다음 턴까지 대기).
-    구현 방식은 UI에 따라 다르지만, 보통은 state['answer']나 UI 바인딩 필드를 갱신하면 됩니다.
-    """
-    q = state.get("human_question") or "원하시는 조건을 더 구체적으로 알려주세요. 예) 기간, 시장(kospi, kosdaq), 신호 종류 등"
-    state["human_question"] = q
-    state["messages"] = state["messages"] + [AIMessage(content=q)]
-    state["question"] = [q]
-    state["ask_human"] = True
 
-def await_human(state: State) -> Optional[Command[Literal["rewrite_query"]]]:
+def ask_human(state: State) -> Command[Literal["task_classifier"]]:
     """
-    다음 턴(사람이 답한 뒤)에 호출된다 가정.
+    1) 질문을 메시지에 남기고
+    2) interrupt()로 실행을 멈춰 사용자 입력을 기다림
+    3) 재개 시 사람의 답변을 기존 질의와 병합 → task_classifier로 점프
     """
-    if isinstance(state["messages"][-1], HumanMessage):
-        # 사람 답변 도착 → 쿼리 재작성 단계로
-        return Command(goto="rewrite_query", update={"ask_human": False})
-    return None
+    q = state.get("human_question")
 
-def rewrite_query(state: State) -> Command[Literal["task_classifier"]]:
-    """
-    사람의 추가 정보를 기존 질의와 병합해 messages를 정제하고,
-    파이프라인을 처음 단계(task_classifier)로 되돌린다.
-    """
-    update = rewrite_query_with_human_feedback(state)
-    return Command(goto="task_classifier", update=update)
+    # 질문을 대화 흐름에 남겨둔다
+    messages = state["messages"] + [AIMessage(content=q)]
 
-def ambiguity_handler(state: State) -> Command[Literal["task1", "task2", "task3", "asking_to_human"]]:
+    # 🔴 여기서 그래프 실행 '정지' → 동일 thread로 HumanMessage가 도착하면 다음 줄부터 재개
+    human_reply: HumanMessage = interrupt(
+        value={"reason": "need_more_info", "question": q}
+    )
+
+    # 사용자 답변을 messages에 붙인다
+    resumed_state = dict(state)
+    resumed_state["messages"] = messages + [human_reply]
+    resumed_state["ask_human"] = False
+    resumed_state["human_question"] = q
+
+    # 기존 병합 유틸 재사용 (원질의 + 추가 입력을 합침)
+    merged = rewrite_query_with_human_feedback(resumed_state)
+
+    # 분류 단계로 되돌림
+    return Command(goto="task_classifier", update=merged)
+
+def ambiguity_handler(state: State) -> Command[Literal["task1", "task2", "task3", "ask_human"]]:
     last = state["messages"][-1]
     query_text = getattr(last, "content", "")
 
@@ -252,7 +247,7 @@ def ambiguity_handler(state: State) -> Command[Literal["task1", "task2", "task3"
             if not has_signal:
                 q.append("신호 종류(예: RSI 과매수/볼린저 상단 터치/골든크로스 등)")
             ask = "분석을 위해 추가 정보가 필요합니다. " + " / ".join(q) + " 를 알려주세요."
-            return Command(goto="asking_to_human", update={**new_state, "human_question": ask, "ask_human": False})
+            return Command(goto="ask_human", update={**new_state, "human_question": ask, "ask_human": False})
 
     elif task_name == "Task2":
         has_date = _has(getattr(task_obj, "date", None))
@@ -261,7 +256,7 @@ def ambiguity_handler(state: State) -> Command[Literal["task1", "task2", "task3"
             return Command(goto="task2", update=new_state)
         else:
             ask = "조건 검색을 위해 날짜와 조건(등락률/거래량 등)을 구체화해 주세요. 예: 2025-06-13, 등락률 ≥ 7%, 거래량 전일 대비 ≥ 300%."
-            return Command(goto="asking_to_human", update={**new_state, "human_question": ask, "ask_human": False})
+            return Command(goto="ask_human", update={**new_state, "human_question": ask, "ask_human": False})
 
     elif task_name == "Task1":
         has_date = _has(getattr(task_obj, "date", None))
@@ -269,10 +264,10 @@ def ambiguity_handler(state: State) -> Command[Literal["task1", "task2", "task3"
             return Command(goto="task1", update=new_state)
         else:
             ask = "조회할 날짜(또는 기간)를 알려주세요. 예: 2025-01-21."
-            return Command(goto="asking_to_human", update={**new_state, "human_question": ask, "ask_human": False})
+            return Command(goto="ask_human", update={**new_state, "human_question": ask, "ask_human": False})
 
     # 혹시 모르면 사람에게
-    return Command(goto="asking_to_human", update={**new_state, "human_question": "원하시는 조건을 조금 더 구체적으로 알려주세요.", "ask_human": False})
+    return Command(goto="ask_human", update={**new_state, "human_question": "원하시는 조건을 조금 더 구체적으로 알려주세요.", "ask_human": False})
 
 def llm_answer(state: State) -> Command[END]:
     """
