@@ -11,15 +11,11 @@ def build_graph():
     graph_builder.add_node("task1", task1)
     graph_builder.add_node("task2", task2)
     graph_builder.add_node("task3", task3)
-    graph_builder.add_node("asking_to_human", asking_to_human)
-    graph_builder.add_node("emit_question", emit_question)
-    graph_builder.add_node("await_human", await_human)
-    graph_builder.add_node("rewrite_query", rewrite_query)
+    graph_builder.add_node("ask_human", ask_human)
     graph_builder.add_node("ambiguity_handler", ambiguity_handler)
     graph_builder.add_node("llm_answer", llm_answer)
 
     graph_builder.add_edge(START, "task_classifier")
-    graph_builder.add_edge("emit_question", END)
     graph_builder.add_edge("llm_answer", END)
 
     return graph_builder.compile()

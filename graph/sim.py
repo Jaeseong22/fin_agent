@@ -1,4 +1,3 @@
-# sim.py
 from graph1 import build_graph
 from schema import State
 from langchain_core.messages import HumanMessage
@@ -13,6 +12,7 @@ def main():
     }
     # 그래프 실행 (invoke는 동기 실행, 결과 state 반환)
     result_state = graph.invoke(init_state)
+
 
     print("\n=== 답변 ===")
     print(result_state.get("answer"))
