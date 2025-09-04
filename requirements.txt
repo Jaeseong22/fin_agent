@@ -358,3 +358,8 @@ xxhash==3.5.0
 yarl==1.20.1
 zipp==3.23.0
 zstandard==0.23.0
+# MCP 관련 패키지들 (Python 3.12+ 필요)
+# mcp[cli]>=1.6.0  # Python 3.12+ 필요
+mcp[cli]>=1.6.0; python_version>="3.12"
+# Python 3.11용 대안
+mcp[server]>=1.6.0; python_version<"3.12"

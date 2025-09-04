@@ -327,4 +327,3 @@ def llm_answer(state: State) -> Command[END]:
         answer = f"질의: {nq}\n\n" + answer
 
     return Command(goto=END, update={"answer": [answer], "result": result})
-

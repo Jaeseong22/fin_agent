@@ -75,7 +75,17 @@ pip install -U pip
 pip install -r requirements.txt
 
 필수 패키지(예시)
-langgraph, langchain-core, langchain-openai, langsmith, pydantic, python-dotenv, sqlalchemy(+드라이버), yfinance 등
+langgraph, langchain-core, langchain-openai, langsmith, pydantic, python-dotenv, sqlalchemy(+드라이버), yfinance, mcp[cli] 등
+
+## MCP 서버 연동 (선택사항)
+
+로컬 DB 대신 MCP 서버의 데이터베이스를 사용하려면:
+
+1. **MCP 서버 설치**: `pip install mcp-server-mysql` (또는 다른 DB)
+2. **환경 변수 설정**: `env.example`을 `.env`로 복사하고 `USE_MCP=true` 설정
+3. **연결 테스트**: `python test_mcp_connection.py`
+
+자세한 설정은 [MCP_SETUP.md](MCP_SETUP.md)를 참조하세요.
 
 ⸻
 
@@ -105,14 +115,24 @@ fin_agent/
 ├─ README.md
 ├─ requirements.txt
 ├─ .env
-├─ schema.py                  # State, Task1/Task2/Task3 (Pydantic)
-├─ utils.py                   # run_task*_query, check_task*, _r_* 포맷터 등
-├─ graph.py                   # Core Graph (본 README의 노드와 매핑)
+├─ env.example               # 환경 변수 예시
+├─ MCP_SETUP.md             # MCP 서버 설정 가이드
+├─ test_mcp_connection.py   # MCP 연결 테스트
+├─ graph/
+│  ├─ agent.py              # LangGraph 노드 함수들
+│  ├─ graph1.py             # 그래프 빌더
+│  ├─ schema.py             # State, Task1/Task2/Task3 (Pydantic)
+│  ├─ utils.py              # run_task*_query, check_task*, _r_* 포맷터 등
+│  ├─ mcp_config.py         # MCP 클라이언트 설정
+│  ├─ company_name.csv      # 종목명 매핑
+│  ├─ stock_terms.csv       # 용어 정규화
+│  ├─ classify_json/        # 분류 결과
+│  └─ result_json/          # 쿼리 결과
 ├─ etl/
-│  ├─ run_yf_etl.py          # yfinance → DB 적재 스크립트
-│  └─ models.sql             # 테이블 스키마(예시)
+│  ├─ run_yf_etl.py         # yfinance → DB 적재 스크립트
+│  └─ models.sql            # 테이블 스키마(예시)
 └─ prompts/
-   ├─ task_classifier.json   # LangSmith Prompt(원격 관리 가능)
+   ├─ task_classifier.json  # LangSmith Prompt(원격 관리 가능)
    ├─ parsing_task1.json
    ├─ parsing_task2.json
    └─ parsing_task3.json
