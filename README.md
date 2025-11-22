@@ -68,35 +68,6 @@ flowchart TD
 
 ⸻
 
-## Installation
-
-### 1) Python >= 3.10 권장
-python -V
-
-### 2) 가상환경
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-
-### 3) 패키지 설치
-pip install -U pip
-pip install -r requirements.txt
-
-필수 패키지(예시)
-langgraph, langchain-core, langchain-openai, langsmith, pydantic, python-dotenv, sqlalchemy(+드라이버), yfinance
-
-⸻
-
-## Configuration
-
-루트에 .env 생성:
-
-OPENAI_API_KEY=sk-...
-LANGSMITH_API_KEY=ls-...
-# DB 연결 문자열(예: SQLite/MySQL/Postgres)
-DATABASE_URL=sqlite:///./stock_data.db
-
-⸻
-
 ## Core Graph (노드 동작 요약)
 
 1) 분류기 — task_classifier(state) -> Command[goto]
