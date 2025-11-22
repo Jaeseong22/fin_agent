@@ -173,32 +173,7 @@ simple_lookup, stock_rank, stock_to_market_ratio, market_index_comparison
 	•	Task2: _r_task2(result)
 	•	Task3: _r_task3(result)
 	•	normalized_query가 있으면 헤더에 질의 원문을 표시해 Trace 가독성 확보
-
 ⸻
-
-## Data & DB
-
-ETL 개요
-	•	yfinance에서 코스피/코스닥 종목을 수집(종가/거래량/시총/지표 등) → 정규화/계산 → ENGINE이 가리키는 DB에 적재
-	•	신호(예: RSI, 볼린저, 골든/데드크로스)는 ETL 선계산 또는 조회 시 계산 중 선택
-
-최소 스키마(예시)
-	•	prices(symbol, trade_date, open, high, low, close, volume, ...)
-	•	indicators(symbol, trade_date, rsi, macd, bb_up, bb_dn, ...)
-	•	signals(symbol, trade_date, signal_type, signal_value, window, ...)
-
-⸻
-
-## Prompts & Tracing (LangSmith)
-	•	Prompts:
-task_classifier, parsing_task1, parsing_task2, parsing_task3
-→ LangSmith에 원격 등록 후 client.pull_prompt("...")로 버전/이력 관리
-	•	Tracing:
-.env에 LANGSMITH_API_KEY 설정 후
-logging.langsmith("fin_agent") 호출 → 실행/프롬프트/토큰 집계
-
-⸻
-
 
 ## Ambiguity & Error Handling
 	•	Ambiguity: 필수정보 누락 → ambiguity_handler가 부족 항목만 묻는 맞춤 질문 생성
