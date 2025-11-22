@@ -97,34 +97,6 @@ DATABASE_URL=sqlite:///./stock_data.db
 
 ⸻
 
-## Project Structure (예시)
-
-fin_agent/
-├─ README.md
-├─ requirements.txt
-├─ .env
-├─ env.example               # 환경 변수 예시
-├─ graph/
-│  ├─ agent.py              # LangGraph 노드 함수들
-│  ├─ graph1.py             # 그래프 빌더
-│  ├─ schema.py             # State, Task1/Task2/Task3 (Pydantic)
-│  ├─ utils.py              # run_task*_query, check_task*, _r_* 포맷터 등
-│  ├─ company_name.csv      # 종목명 매핑
-│  ├─ stock_terms.csv       # 용어 정규화
-│  ├─ classify_json/        # 분류 결과
-│  └─ result_json/          # 쿼리 결과
-├─ etl/
-│  ├─ run_yf_etl.py         # yfinance → DB 적재 스크립트
-│  └─ models.sql            # 테이블 스키마(예시)
-└─ prompts/
-   ├─ task_classifier.json  # LangSmith Prompt(원격 관리 가능)
-   ├─ parsing_task1.json
-   ├─ parsing_task2.json
-   └─ parsing_task3.json
-
-
-⸻
-
 ## Core Graph (노드 동작 요약)
 
 1) 분류기 — task_classifier(state) -> Command[goto]
