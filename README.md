@@ -1,35 +1,40 @@
-⸻
+# Fin_agent란
 
-fin_agent
+fin_agent는 국내 주식시장 데이터를 이해하기 어려워하는 사용자를 위해
+“질의 → 분석 → 응답”의 전체 과정을 자동화한 금융 분석 LLM 에이전트입니다.
+한국 주식시장(코스피·코스닥) 데이터를 기반으로 사용자의 자연어 질의를 자동으로 분석하고,
+주가·지표·신호·패턴을 SQL 기반으로 조회하여 자연어로 응답하는 금융 특화 LLM 에이전트입니다.
+LangGraph로 상태 전이를 관리하며, LangSmith로 프롬프트·실행을 추적해
+안정적인 금융 분석 워크플로우를 제공합니다.
 
-국내(코스피/코스닥) 전용 자연어 금융 에이전트
-사용자 질의를 해석해 yfinance 기반 DB(📅 2023-08-10 ~ 2025-08-08 데이터 커버리지)를 조회하고, 주가/지표/패턴 결과를 자연어로 응답합니다.
-LangGraph로 상태 기계, LangSmith로 프롬프트/실행을 추적합니다.
-
-TL;DR
+예시 입력 및 출력:
 	•	입력: “삼성전자 vs LG전자 최근 3개월 수익률 비교”, “RSI 70 돌파 종목 알려줘”
 	•	분류: Task1(단순조회/랭킹) · Task2(조건검색) · Task3(신호/패턴) · Chatbot
 	•	실행: Task별 SQL/로직 실행 → 자연어 요약 응답
 
-⸻
-
-✨ Features
-	•	자연어 → 작업 분류(Task1/2/3/Chatbot)
-LangSmith에 저장된 task_classifier 프롬프트로 라우팅
-	•	정밀 파싱
-parsing_task1|2|3 프롬프트 → Pydantic 스키마 유효성 검증
-	•	DB 질의/후처리
-yfinance 기반 ETL로 업데이트된 DB를 ENGINE으로 조회
-	•	모호성 처리(Clarification)
-필수 필드 미비 시 자동 질문 → 사용자 응답 병합 후 재시도
-	•	유형별 응답 템플릿
-_r_task1_*, _r_task2, _r_task3로 일관된 결과 포맷
-	•	LangSmith 트레이싱
-langchain_teddynote.logging.langsmith("fin_agent")
+	• 목적: 국내 종목 기반 ‘질의 → 분류 → SQL 분석 → 자연어 응답’의 전체 흐름을 자동화
 
 ⸻
 
-🗺️ Architecture
+## Features
+• 자연어 → Task 분류  
+   LangSmith에 저장된 task_classifier 프롬프트 기반 라우팅
+
+• 정밀 파싱  
+   parsing_task1/2/3 + Pydantic 스키마 검증
+
+• DB 질의/후처리  
+   yfinance 기반 ETL → ENGINE 조회
+
+• 모호성 처리  
+   필수 필드 누락 시 Clarification 질문 자동 생성
+
+• 유형별 응답 템플릿  
+   _r_task1_*, _r_task2, _r_task3의 일관된 포맷
+
+⸻
+
+## Architecture
 
 flowchart TD
     U[User Message] --> C[task_classifier]
@@ -58,38 +63,30 @@ flowchart TD
     CB --> LA
     LA --> END
 
+전체 그래프는 입력 → 분류 → 파싱 → DB 검증 → SQL 실행 → 응답의
+안정적인 처리 파이프라인을 LangGraph로 구현한 구조입니다.
 
 ⸻
 
-📦 Installation
+## Installation
 
-# 1) Python >= 3.10 권장
+### 1) Python >= 3.10 권장
 python -V
 
-# 2) 가상환경
+### 2) 가상환경
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 
-# 3) 패키지 설치
+### 3) 패키지 설치
 pip install -U pip
 pip install -r requirements.txt
 
 필수 패키지(예시)
-langgraph, langchain-core, langchain-openai, langsmith, pydantic, python-dotenv, sqlalchemy(+드라이버), yfinance, mcp[cli] 등
-
-## MCP 서버 연동 (선택사항)
-
-로컬 DB 대신 MCP 서버의 데이터베이스를 사용하려면:
-
-1. **MCP 서버 설치**: `pip install mcp-server-mysql` (또는 다른 DB)
-2. **환경 변수 설정**: `env.example`을 `.env`로 복사하고 `USE_MCP=true` 설정
-3. **연결 테스트**: `python test_mcp_connection.py`
-
-자세한 설정은 [MCP_SETUP.md](MCP_SETUP.md)를 참조하세요.
+langgraph, langchain-core, langchain-openai, langsmith, pydantic, python-dotenv, sqlalchemy(+드라이버), yfinance
 
 ⸻
 
-🔐 Configuration
+## Configuration
 
 루트에 .env 생성:
 
@@ -98,32 +95,20 @@ LANGSMITH_API_KEY=ls-...
 # DB 연결 문자열(예: SQLite/MySQL/Postgres)
 DATABASE_URL=sqlite:///./stock_data.db
 
-코드 시작부:
-
-from dotenv import load_dotenv
-from langchain_teddynote import logging
-load_dotenv()
-logging.langsmith("fin_agent")
-
-OpenAI Python SDK(>=1.x)는 예전 openai.ChatCompletion 대신 새로운 인터페이스를 권장합니다.
-
 ⸻
 
-🧱 Project Structure (예시)
+## Project Structure (예시)
 
 fin_agent/
 ├─ README.md
 ├─ requirements.txt
 ├─ .env
 ├─ env.example               # 환경 변수 예시
-├─ MCP_SETUP.md             # MCP 서버 설정 가이드
-├─ test_mcp_connection.py   # MCP 연결 테스트
 ├─ graph/
 │  ├─ agent.py              # LangGraph 노드 함수들
 │  ├─ graph1.py             # 그래프 빌더
 │  ├─ schema.py             # State, Task1/Task2/Task3 (Pydantic)
 │  ├─ utils.py              # run_task*_query, check_task*, _r_* 포맷터 등
-│  ├─ mcp_config.py         # MCP 클라이언트 설정
 │  ├─ company_name.csv      # 종목명 매핑
 │  ├─ stock_terms.csv       # 용어 정규화
 │  ├─ classify_json/        # 분류 결과
@@ -140,7 +125,7 @@ fin_agent/
 
 ⸻
 
-🧠 Core Graph (노드 동작 요약)
+## Core Graph (노드 동작 요약)
 
 1) 분류기 — task_classifier(state) -> Command[goto]
 	•	입력: state["messages"][-1]
@@ -191,7 +176,7 @@ simple_lookup, stock_rank, stock_to_market_ratio, market_index_comparison
 
 ⸻
 
-🗃️ Data & DB
+## Data & DB
 
 ETL 개요
 	•	yfinance에서 코스피/코스닥 종목을 수집(종가/거래량/시총/지표 등) → 정규화/계산 → ENGINE이 가리키는 DB에 적재
@@ -202,58 +187,9 @@ ETL 개요
 	•	indicators(symbol, trade_date, rsi, macd, bb_up, bb_dn, ...)
 	•	signals(symbol, trade_date, signal_type, signal_value, window, ...)
 
-실제 스키마는 운영 ETL에 맞춰 README에 표/컬럼 정의를 추가하는 것을 권장합니다.
-
 ⸻
 
-🚀 Quickstart
-
-from langgraph.types import Command
-from langchain_core.messages import HumanMessage
-from graph import (
-    task_classifier, query_parsing, db_check,
-    task1, task2, task3, ask_human, ambiguity_handler, llm_answer
-)
-
-# 1) 초기 state
-state = {
-    "messages": [HumanMessage(content="2025-02-11에 KOSDAQ에서 가장 비싼 종목 3개는?")],
-}
-
-# 2) 분류
-cmd = task_classifier(state)
-
-# 3) 전이 루프 (의사코드)
-while True:
-    goto = cmd.get("goto")
-    state.update(cmd.get("update", {}))
-
-    if goto == "query_parsing":
-        cmd = query_parsing(state)
-    elif goto == "db_check":
-        cmd = db_check(state)
-    elif goto == "task1":
-        cmd = task1(state)
-    elif goto == "task2":
-        cmd = task2(state)
-    elif goto == "task3":
-        cmd = task3(state)
-    elif goto == "ask_human":
-        # UI/서버에서는 interrupt를 감지해 사용자 입력을 받아 이어붙인 뒤 재개
-        cmd = ask_human(state)
-    elif goto == "llm_answer":
-        cmd = llm_answer(state)
-        break
-    else:
-        break
-
-print(state.get("answer", ["<no answer>"])[0])
-
-실제 앱에서는 **LangGraph StateGraph**로 전이를 선언하고, 웹서버/봇 I/O를 연결하세요.
-
-⸻
-
-🙋 Prompts & Tracing (LangSmith)
+## Prompts & Tracing (LangSmith)
 	•	Prompts:
 task_classifier, parsing_task1, parsing_task2, parsing_task3
 → LangSmith에 원격 등록 후 client.pull_prompt("...")로 버전/이력 관리
@@ -263,67 +199,9 @@ logging.langsmith("fin_agent") 호출 → 실행/프롬프트/토큰 집계
 
 ⸻
 
-🔧 Local ETL (국내시장 예시)
 
-# 장 마감 이후 일괄 업데이트(예시)
-python etl/run_yf_etl.py \
-  --symbols 005930.KS,000660.KS,035420.KS,035720.KS,091990.KQ \
-  --since 2023-08-10 \
-  --until 2025-08-08 \
-  --db $DATABASE_URL
-
-	•	*.KS = 코스피, *.KQ = 코스닥 (Yahoo Ticker 표기)
-	•	RSI/MACD/볼린저밴드 등은 ETL에서 선계산해 indicators/signals에 저장하거나, 조회 시 계산 가능
-
-⸻
-
-⚠️ Ambiguity & Error Handling
+## Ambiguity & Error Handling
 	•	Ambiguity: 필수정보 누락 → ambiguity_handler가 부족 항목만 묻는 맞춤 질문 생성
 	•	Validation: 파싱 실패/Pydantic 오류 → ask_human로 전환
 	•	DB 오류: run_task*_query 예외는 {status:"error", reason}로 래핑 → llm_answer가 사용자 친화 메시지 생성
 	•	Fallback: 분류 실패 → chatbot
-
-⸻
-
-🧪 Testing (권장)
-	•	Unit:
-	•	utils._r_*(응답 포맷터), check_task*(필드검증) → 고정입력/예상출력 테스트
-	•	Integration:
-	•	in-memory SQLite로 run_task*_query 경로 테스트
-	•	소량 샘플 데이터로 ETL → 조회 → 응답까지 E2E 확인
-	•	Prompt:
-	•	LangSmith Prompt 테스트 런으로 분류/파싱 정확도 점검 및 회귀 테스트
-
-⸻
-
-📐 Design Choices
-	•	Core–Satellite 분리: 분류/파싱/질의/응답을 모듈화해 디버깅 용이성 확보
-	•	Interrupt 기반 UX: ask → interrupt → merge → 재분류로 모호성 최소화
-	•	Typed Renderer: 결과 type 별 포맷터로 재현성/테스트 용이성 강화
-
-⸻
-
-🔌 Integration Tips
-	•	API 서버화: FastAPI 등으로 POST /ask → state 초기화·실행 → answer 반환
-	•	프런트엔드: interrupt 발생 시 질문 노출 → 사용자 입력을 동일 thread로 전달해 재개
-	•	스케줄러: ETL은 cron/Airflow 등으로 정기 실행 (장 마감 이후 권장)
-
-⸻
-
-📄 License
-
-프로젝트 정책에 맞는 라이선스를 명시하세요(예: MIT/Apache-2.0).
-
-⸻
-
-🙌 Acknowledgements
-
-README 구성은 여러 OSS README 스타일을 참고해 정리했습니다. 프롬프트/SDK/예제는 최신 버전을 따라주세요.
-
-⸻
-
-✅ 다음 단계 제안
-	•	실제 DB 스키마 표(컬럼/타입/인덱스) 추가
-	•	ETL 실행 로그/샘플 스크린샷 첨부
-	•	샘플 질의 → 응답 화면(스크린샷)
-	•	주요 SQL 뷰/인덱스 설계 요약 (예: 최근 N거래일 윈도우, 랭킹용 인덱스)
