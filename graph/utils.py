@@ -986,7 +986,10 @@ def _build_base_where(d: date, market: Optional[List[str]]) -> Tuple[List[str], 
     params: Dict[str, Any] = {"d": d}
     mk_sql, mk_params = _market_filter_names_sql("t", market)
     if mk_sql:
-        where.append(mk_sql)
+        market_condition = mk_sql.strip()
+        if market_condition.upper().startswith("AND "):
+            market_condition = market_condition[4:]
+        where.append(market_condition)
         params.update(mk_params)
     return where, params
 
@@ -1635,15 +1638,22 @@ def run_task3_query(task_obj, engine: Engine = ENGINE) -> Dict[str, Any]:
         )
 
     elif stype == "rsi":
+        threshold = float(sig.get("threshold", 70))
+        condition = sig.get("condition") or (
+            "overbought" if threshold >= 50 else "oversold"
+        )
         return _task3_rsi(
             engine, company_name, market, ds, de,
-            threshold=float(sig["threshold"]), condition=sig["condition"], mode=mode
+            threshold=threshold, condition=condition, mode=mode
         )
 
     elif stype == "bollinger_band":
+        band = sig.get("band")
+        if band not in ("upper", "lower"):
+            return {"status": "error", "reason": "볼린저밴드 상단/하단 정보가 필요합니다."}
         return _task3_bollinger(
             engine, company_name, market, ds, de,
-            band=sig["band"], touch=bool(sig["touch"]), mode=mode
+            band=band, touch=bool(sig.get("touch", True)), mode=mode
         )
     elif stype == "moving_average_diff":
         return _task3_moving_average_diff(

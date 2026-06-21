@@ -53,6 +53,49 @@ def _pull_public_prompt(name: str):
 task_classifier_prompt = _pull_public_prompt("task_classifier")
 
 
+def _prepare_task_payload(task_name: str, data: dict) -> dict:
+    nested = data.get(task_name)
+    payload = dict(nested) if isinstance(nested, dict) else dict(data)
+
+    model_by_task = {"Task1": Task1, "Task2": Task2, "Task3": Task3}
+    model = model_by_task[task_name]
+    for key in model.model_fields:
+        if key not in payload and key in data:
+            payload[key] = data[key]
+
+    if task_name == "Task3":
+        signals = payload.get("signal_type")
+        if isinstance(signals, dict):
+            signals = [signals]
+        if isinstance(signals, list):
+            normalized_signals = []
+            for raw_signal in signals:
+                signal = dict(raw_signal)
+                if signal.get("type") == "rsi":
+                    threshold = float(signal.get("threshold", 70))
+                    signal["threshold"] = threshold
+                    signal.setdefault(
+                        "condition",
+                        "overbought" if threshold >= 50 else "oversold",
+                    )
+                elif signal.get("type") == "bollinger_band":
+                    signal.setdefault("touch", True)
+                elif signal.get("type") == "moving_average_diff":
+                    signal.setdefault("period", 20)
+                    signal.setdefault("diff_percentage", 0)
+                    signal.setdefault("direction", "above")
+                normalized_signals.append(signal)
+            payload["signal_type"] = normalized_signals
+
+    return payload
+
+
+def _validate_task_update(task_obj, payload: dict):
+    merged = task_obj.model_dump()
+    merged.update(payload)
+    return type(task_obj).model_validate(merged)
+
+
 def task_classifier(state: State) -> Command[Literal["query_parsing", "ask_human","chatbot"]]:
     messages = state["messages"][-1]
     chain = task_classifier_prompt
@@ -114,13 +157,13 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
-                return Command(goto="ask_human")
-            payload = data.get("Task1", data)
+                return Command(goto="ask_human", update={"human_question": DEFAULT_Q})
+            payload = _prepare_task_payload("Task1", data)
             try:
-                updated_task = task_obj.model_copy(update=payload)
+                updated_task = _validate_task_update(task_obj, payload)
             except Exception as e:
                 print("parsing validation error:", e)
-                return Command(goto="ask_human")
+                return Command(goto="ask_human", update={"human_question": DEFAULT_Q})
             return Command(goto="db_check", update={"task": updated_task})
         
         case "Task2":
@@ -128,13 +171,13 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
-                return Command(goto="ask_human")
-            payload = data.get("Task2", data)
+                return Command(goto="ask_human", update={"human_question": DEFAULT_Q})
+            payload = _prepare_task_payload("Task2", data)
             try:
-                updated_task = task_obj.model_copy(update=payload)
+                updated_task = _validate_task_update(task_obj, payload)
             except Exception as e:
                 print("parsing validation error:", e)
-                return Command(goto="ask_human")
+                return Command(goto="ask_human", update={"human_question": DEFAULT_Q})
             return Command(goto="db_check", update={"task": updated_task})
             
         case "Task3":
@@ -142,13 +185,13 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
-                return Command(goto="ask_human")
-            payload = data.get("Task3", data)
+                return Command(goto="ask_human", update={"human_question": DEFAULT_Q})
+            payload = _prepare_task_payload("Task3", data)
             try:
-                updated_task = task_obj.model_copy(update=payload)
+                updated_task = _validate_task_update(task_obj, payload)
             except Exception as e:
                 print("parsing validation error:", e)
-                return Command(goto="ask_human")
+                return Command(goto="ask_human", update={"human_question": DEFAULT_Q})
             return Command(goto="db_check", update={"task": updated_task})
         
         case _:
