@@ -88,7 +88,7 @@ cp .env.sample .env
 `jaeseong22/parsing_task2`, `jaeseong22/parsing_task3`에서 직접 불러옵니다.
 따라서 프롬프트 사용에는 `LANGSMITH_API_KEY`가 필요하지 않습니다.
 
-### 3) MySQL 실행 및 샘플 데이터 적재
+### 3) MySQL 실행 및 데이터 적재
 
 Docker Compose로 MySQL 8을 실행합니다.
 
@@ -97,11 +97,11 @@ docker compose up -d mysql
 docker compose ps
 ```
 
-MySQL이 준비되면 샘플 유니버스의 최근 6개월 데이터를 적재합니다.
+MySQL이 준비되면 전체 유니버스의 최근 6개월 데이터를 적재합니다.
 
 ```bash
 python scripts/load_stock_prices.py \
-  --universe-csv data/universe.sample.csv \
+  --universe-csv data/universe.csv \
   --truncate
 ```
 
@@ -189,8 +189,6 @@ python scripts/load_stock_prices.py --universe-csv data/universe.csv
 3) CI/스케줄링으로 자동 실행하려면 아래의 GitHub Actions 예시를 사용하세요 (비밀은 `Secrets`에 저장).
 
 `data/universe.csv`는 아래처럼 준비합니다.
-
-샘플 파일은 [data/universe.sample.csv](data/universe.sample.csv) 를 참고하세요.
 
 ```csv
 종목코드,종목명,시장구분
