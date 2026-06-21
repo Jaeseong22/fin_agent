@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-import sys
+"""Moved example runner (kept for dev; not required in core distribution)."""
 from pathlib import Path
-from datetime import timedelta, date
+import sys
+from datetime import timedelta
 
 repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
@@ -76,7 +77,6 @@ def example_compare_3m(engine):
             print('결론: 두 종목 수익률 동일')
             lsc.finish_run(run, {"result":"동일","ra":ra,"rb":rb})
     else:
-        # partial or missing data
         lsc.finish_run(run, {"ra": ra, "rb": rb})
 
 def example_rsi_70(engine):
