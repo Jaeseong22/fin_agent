@@ -58,11 +58,9 @@ def task_classifier(state: State) -> Command[Literal["query_parsing", "ask_human
     chain = task_classifier_prompt
     result = chain.invoke({"messages" : messages.content})
     try:
-        tool_calls = result.additional_kwargs.get("tool_calls", [])
-        if not tool_calls:
+        arguments = parse_tool_json(result)
+        if not arguments:
             return Command(goto="chatbot")
-        arguments_str = tool_calls[0]["function"]["arguments"]
-        arguments = json.loads(arguments_str)
         task = arguments.get("Task")
     except Exception as e:
         print("task parse error:", e)
@@ -101,7 +99,7 @@ def task_classifier(state: State) -> Command[Literal["query_parsing", "ask_human
        
 def chatbot(state: State) -> Command[Literal["llm_answer"]]:
     messages = state["messages"][-1]
-    result = llm.invoke(messages)
+    result = llm.invoke([messages])
     return Command(goto="llm_answer",
                    update={"answer": [result.content]})
 

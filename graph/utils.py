@@ -73,6 +73,14 @@ ENGINE: Engine = create_engine(
 def parse_tool_json(result: Any) -> Optional[dict]:
     """LangChain tool_calls 결과에서 첫 번째 함수 인자의 JSON을 파싱. 실패하면 None."""
     try:
+        tool_calls = getattr(result, "tool_calls", None) or []
+        if tool_calls:
+            args = tool_calls[0].get("args")
+            if isinstance(args, dict):
+                return args
+            if isinstance(args, str):
+                return json.loads(args)
+
         tool_calls = getattr(result, "additional_kwargs", {}).get("tool_calls", [])
         if not tool_calls:
             return None
