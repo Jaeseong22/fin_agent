@@ -59,6 +59,199 @@ FinAgent는 이러한 문제를 해결하기 위해
 
 ⸻
 
+## 로컬 실행 준비
+
+이 프로젝트는 로컬 MySQL에 `stock_prices` 테이블이 있어야 동작합니다. 데이터는 yfinance에서 최근 6개월치를 받아 적재하는 방식으로 준비하면 됩니다.
+
+### 1) 설치
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2) 환경 변수
+
+`.env`에 최소한 아래 값을 넣습니다.
+
+```bash
+MYSQL_USER=...
+MYSQL_PASSWORD=...
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_DATABASE=...
+LANGSMITH_API_KEY=...  # 주의: 절대 리포지토리에 커밋하지 마세요
+
+### LangSmith API 키 보안 권장 사항
+
+- 로컬 개발: `.env` 파일에 키를 넣고 `.gitignore`에 `.env`가 포함되어 있는지 확인하세요. 절대 커밋하지 마십시오.
+- CI / 자동화: GitHub Actions 등 CI에서 실행할 경우 `Settings → Secrets`에 `LANGSMITH_API_KEY`를 설정한 뒤 워크플로에서 `secrets.LANGSMITH_API_KEY`로 주입하세요.
+- 다중 사용자 환경: 운영서버나 공유환경에서는 OS 수준의 비밀 관리(예: macOS Keychain, Windows Credential Manager, HashiCorp Vault, AWS Secrets Manager 등)를 사용하세요.
+
+예시: GitHub Actions에서 비밀 사용
+
+1. 리포지토리 Settings → Secrets → Actions → New repository secret
+	- Name: `LANGSMITH_API_KEY`
+	- Value: (실제 키)
+2. 워크플로에서 `secrets.LANGSMITH_API_KEY`를 환경변수로 주입해 사용합니다.
+
+```
+
+### 3) 테이블 스키마
+
+현재 코드가 실제로 읽는 핵심 테이블은 `stock_prices`입니다.
+`official_name`은 관리 편의를 위한 보조 컬럼이고, 현재 쿼리 로직의 필수 컬럼은 아닙니다.
+
+```sql
+CREATE TABLE stock_prices (
+	id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+	name VARCHAR(100) NOT NULL,          -- 예: 005930_삼성전자
+	official_name VARCHAR(100) NOT NULL, -- 예: 삼성전자
+	trade_date DATE NOT NULL,
+
+	open DOUBLE,
+	high DOUBLE,
+	low DOUBLE,
+	close DOUBLE,
+	adj_close DOUBLE,
+	volume BIGINT UNSIGNED,
+
+	market_cap BIGINT,                  -- 시가총액 = 종가 * 상장주식수
+
+	UNIQUE KEY uq_stock_date (name, trade_date),
+	INDEX idx_trade_date (trade_date),
+	INDEX idx_name (name),
+	INDEX idx_official_name (official_name),
+	INDEX idx_market_cap (market_cap)
+);
+```
+
+컬럼 의미는 아래처럼 잡으면 됩니다.
+
+```text
+name          : 종목코드_종목명 형태. 예) 005930_삼성전자
+official_name : 종목명만 따로 저장. 예) 삼성전자
+trade_date    : 거래일
+open          : 시가
+high          : 고가
+low           : 저가
+close         : 종가
+adj_close     : 수정종가
+volume        : 거래량
+market_cap    : 시가총액 = 종가 * 상장주식수
+```
+
+### 4) yfinance 적재 흐름
+
+적재는 보통 아래 순서로 하면 됩니다.
+
+1. yfinance에서 최근 6개월치 OHLCV를 수집한다.
+2. 종목코드와 종목명을 합쳐 `name`을 만든다. 예: `005930_삼성전자`
+3. `official_name`에는 종목명만 저장한다.
+4. `trade_date`, `open`, `high`, `low`, `close`, `adj_close`, `volume`을 그대로 넣는다.
+5. 시가총액은 별도 스테이징 테이블에서 계산한 뒤 `stock_prices.market_cap`에 업데이트한다.
+
+바로 적재하려면 아래 스크립트를 사용하면 됩니다.
+
+```bash
+python scripts/load_stock_prices.py --universe-csv data/universe.csv --truncate
+```
+
+로컬에서 전체 유니버스를 적재하려면 다음을 권장합니다.
+
+1) 먼저 테스트로 일부만 적재 (`--limit`)하여 DB 연결/권한/데이터 형식을 확인합니다.
+
+```bash
+python scripts/load_stock_prices.py --universe-csv data/universe.csv --limit 20
+```
+
+2) 이상 없으면 전체 적재를 수행합니다 (원하시면 `--truncate`로 덮어쓰기).
+
+```bash
+python scripts/load_stock_prices.py --universe-csv data/universe.csv
+```
+
+3) CI/스케줄링으로 자동 실행하려면 아래의 GitHub Actions 예시를 사용하세요 (비밀은 `Secrets`에 저장).
+
+### GitHub에 푸시할 파일
+- `.github/workflows/ingest.yml` : CI 워크플로 템플릿
+- `scripts/ci_ingest.sh` : Actions에서 호출하는 간단 래퍼
+
+이제 로컬에서 테스트 후 CI 템플릿을 사용해 자동 적재를 구성할 수 있습니다.
+
+`data/universe.csv`는 아래처럼 준비합니다.
+
+샘플 파일은 [data/universe.sample.csv](data/universe.sample.csv) 를 참고하세요.
+
+```csv
+종목코드,종목명,시장구분
+005930,삼성전자,KOSPI
+000660,SK하이닉스,KOSPI
+```
+
+스크립트는 `stock_prices`와 `market_cap_stage`를 자동 생성하고, 최근 6개월치 데이터를 yfinance에서 받아 적재합니다.
+
+시가총액 스테이징은 이렇게 두면 됩니다.
+
+```sql
+CREATE TABLE market_cap_stage (
+	name VARCHAR(100) NOT NULL,
+	trade_date DATE NOT NULL,
+	market_cap BIGINT,
+	UNIQUE KEY uq_stage (name, trade_date),
+	INDEX idx_stage_name_date (name, trade_date)
+);
+```
+
+스테이징 값으로 본 테이블을 갱신합니다.
+
+```sql
+UPDATE stock_prices s
+JOIN market_cap_stage m
+  ON s.name = m.name
+ AND s.trade_date = m.trade_date
+SET s.market_cap = m.market_cap;
+```
+
+### 5) 주의사항
+
+Task2에서 등락률/거래량 변화율을 계산할 때 `volume`이 `BIGINT UNSIGNED`이면 MySQL 연산 특성상 캐스팅을 명시하는 편이 안전합니다.
+
+```sql
+((CAST(t.volume AS SIGNED) - CAST(p.volume AS SIGNED))
+ / NULLIF(CAST(p.volume AS SIGNED), 0) * 100.0)
+```
+
+현재 코드도 동일한 방식으로 처리하고 있습니다.
+
+### 6) 적재 후 확인
+
+```sql
+SELECT COUNT(*) FROM stock_prices;
+
+SELECT COUNT(*)
+FROM stock_prices
+WHERE market_cap IS NOT NULL;
+
+SELECT name, trade_date, close, volume, market_cap
+FROM stock_prices
+WHERE market_cap IS NOT NULL
+ORDER BY trade_date DESC
+LIMIT 10;
+```
+
+### 7) 실행
+
+환경 변수와 DB 적재가 끝나면 아래처럼 실행합니다.
+
+```bash
+python graph/sim.py
+```
+
+⸻
+
 ## Architecture
 
 flowchart TD
