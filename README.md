@@ -342,4 +342,4 @@ simple_lookup, stock_rank, stock_to_market_ratio, market_index_comparison
 	•	Fallback: 분류 실패 → chatbot
 
 ## 실행 화면
-https://github.com/user-attachments/assets/4494e965-84cc-434b-b620-bcf753cdfe02
+https://github.com/user-attachments/assets/4af263c7-2bdf-45ff-b8a3-e4ade84e98c4
