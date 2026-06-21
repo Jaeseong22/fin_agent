@@ -33,16 +33,24 @@ from langsmith import Client
 
 # 맨 위 근처에 상수 추가
 DEFAULT_Q = "원하시는 조건을 더 구체적으로 알려주세요. 예) 기간, 시장(KOSPI/KOSDAQ), 신호 종류 등"
+PROMPT_OWNER = "jaeseong22"
 
 llm = ChatOpenAI(temperature=0.2, 
                  model="gpt-4o-mini",)
 
-client = Client(api_key=os.environ.get("LANGSMITH_API_KEY"))
-task_classifier_prompt = client.pull_prompt(
-    "task_classifier",
-    include_model=True,
-    secrets_from_env=True,
-)
+client = Client()
+
+
+def _pull_public_prompt(name: str):
+    return client.pull_prompt(
+        f"{PROMPT_OWNER}/{name}",
+        include_model=True,
+        secrets_from_env=True,
+        dangerously_pull_public_prompt=True,
+    )
+
+
+task_classifier_prompt = _pull_public_prompt("task_classifier")
 
 
 def task_classifier(state: State) -> Command[Literal["query_parsing", "ask_human","chatbot"]]:
@@ -104,11 +112,7 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
 
     match task:
         case "Task1":
-            parsing_prompt = client.pull_prompt(
-                "parsing_task1",
-                include_model=True,
-                secrets_from_env=True,
-            )
+            parsing_prompt = _pull_public_prompt("parsing_task1")
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
@@ -122,11 +126,7 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
             return Command(goto="db_check", update={"task": updated_task})
         
         case "Task2":
-            parsing_prompt = client.pull_prompt(
-                "parsing_task2",
-                include_model=True,
-                secrets_from_env=True,
-            )
+            parsing_prompt = _pull_public_prompt("parsing_task2")
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
@@ -140,11 +140,7 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
             return Command(goto="db_check", update={"task": updated_task})
             
         case "Task3":
-            parsing_prompt = client.pull_prompt(
-                "parsing_task3",
-                include_model=True,
-                secrets_from_env=True,
-            )
+            parsing_prompt = _pull_public_prompt("parsing_task3")
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:

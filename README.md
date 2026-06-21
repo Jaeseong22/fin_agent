@@ -61,7 +61,7 @@ FinAgent는 이러한 문제를 해결하기 위해
 
 ## 로컬 실행 준비
 
-이 프로젝트는 Python 3.11, MySQL 8, OpenAI API, LangSmith를 사용합니다.
+이 프로젝트는 Python 3.11, MySQL 8, OpenAI API, LangSmith Hub를 사용합니다.
 면접용 최소 실행은 아래 순서대로 진행하면 됩니다.
 
 ### 1) 설치
@@ -77,23 +77,20 @@ pip install -r requirements.txt
 
 ### 2) 환경 변수
 
-샘플을 복사한 뒤 본인의 OpenAI/LangSmith 키를 입력합니다.
+샘플을 복사한 뒤 본인의 OpenAI API 키를 입력합니다.
 
 ```bash
 cp .env.sample .env
 ```
 
 `OPENAI_API_KEY`는 질의 분류, 파싱, 자연어 응답에 사용하는 OpenAI 모델 호출에 필요합니다.
-`LANGSMITH_API_KEY`는 LangSmith에 저장된 `task_classifier`, `parsing_task1`,
-`parsing_task2`, `parsing_task3` 프롬프트를 불러오는 데 필요합니다.
+분류·파싱 프롬프트는 LangSmith Hub의 공개 프롬프트
+`jaeseong22/task_classifier`, `jaeseong22/parsing_task1`,
+`jaeseong22/parsing_task2`, `jaeseong22/parsing_task3`에서 직접 불러옵니다.
+따라서 프롬프트 사용에는 `LANGSMITH_API_KEY`가 필요하지 않습니다.
+자신의 LangSmith 워크스페이스에 실행 trace를 남기려면 선택적으로
+`LANGSMITH_API_KEY`를 설정하고 `LANGSMITH_TRACING=true`로 변경합니다.
 실제 API 키는 저장소에 커밋하지 마세요.
-
-새 LangSmith 워크스페이스에서 처음 실행한다면 프롬프트를 한 번 등록합니다.
-이 단계 이후 애플리케이션은 항상 LangSmith에서 프롬프트를 불러옵니다.
-
-```bash
-python scripts/bootstrap_langsmith.py
-```
 
 ### 3) MySQL 실행 및 샘플 데이터 적재
 
