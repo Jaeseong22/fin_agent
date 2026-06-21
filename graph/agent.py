@@ -53,6 +53,24 @@ def _pull_public_prompt(name: str):
 task_classifier_prompt = _pull_public_prompt("task_classifier")
 
 
+def _normalize_classified_task(task: Optional[str], query: str) -> str:
+    technical_terms = (
+        "rsi",
+        "골든크로스",
+        "골든 크로스",
+        "데드크로스",
+        "데드 크로스",
+        "이동평균",
+        "볼린저",
+        "과매수",
+        "과매도",
+    )
+    normalized_query = query.lower()
+    if any(term in normalized_query for term in technical_terms):
+        return "Task3"
+    return task or "Chatbot"
+
+
 def _prepare_task_payload(task_name: str, data: dict) -> dict:
     nested = data.get(task_name)
     payload = dict(nested) if isinstance(nested, dict) else dict(data)
@@ -63,7 +81,28 @@ def _prepare_task_payload(task_name: str, data: dict) -> dict:
         if key not in payload and key in data:
             payload[key] = data[key]
 
-    if task_name == "Task3":
+    if task_name == "Task1":
+        clauses = payload.get("clauses")
+        if isinstance(clauses, list) and len(clauses) == 2:
+            first, second = clauses
+            if (
+                isinstance(first, dict)
+                and isinstance(second, dict)
+                and first.get("type") == second.get("type") == "simple_lookup"
+                and first.get("metric") == second.get("metric")
+                and first.get("company_name")
+                and second.get("company_name")
+            ):
+                payload["clauses"] = [
+                    {
+                        "type": "stock_comparison",
+                        "metric": first["metric"],
+                        "stock_a": first["company_name"],
+                        "stock_b": second["company_name"],
+                    }
+                ]
+
+    elif task_name == "Task3":
         signals = payload.get("signal_type")
         if isinstance(signals, dict):
             signals = [signals]
@@ -104,7 +143,10 @@ def task_classifier(state: State) -> Command[Literal["query_parsing", "ask_human
         arguments = parse_tool_json(result)
         if not arguments:
             return Command(goto="chatbot")
-        task = arguments.get("Task")
+        task = _normalize_classified_task(
+            arguments.get("Task"),
+            messages.content,
+        )
     except Exception as e:
         print("task parse error:", e)
         return Command(goto="chatbot")
