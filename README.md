@@ -340,3 +340,6 @@ simple_lookup, stock_rank, stock_to_market_ratio, market_index_comparison
 	•	Validation: 파싱 실패/Pydantic 오류 → ask_human로 전환
 	•	DB 오류: run_task*_query 예외는 {status:"error", reason}로 래핑 → llm_answer가 사용자 친화 메시지 생성
 	•	Fallback: 분류 실패 → chatbot
+
+## 실행 화면
+https://github.com/user-attachments/assets/4494e965-84cc-434b-b620-bcf753cdfe02
