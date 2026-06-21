@@ -73,7 +73,7 @@ pip install -r requirements.txt
 
 ### 2) 환경 변수
 
-`.env`에 최소한 아래 값을 넣습니다.
+`.env`에 최소한 아래 값을 넣습니다. 자세한 예시는 `.env.sample`을 참고하세요.
 
 ```bash
 MYSQL_USER=...
@@ -81,21 +81,7 @@ MYSQL_PASSWORD=...
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_DATABASE=...
-LANGSMITH_API_KEY=...  # 주의: 절대 리포지토리에 커밋하지 마세요
-
-### LangSmith API 키 보안 권장 사항
-
-- 로컬 개발: `.env` 파일에 키를 넣고 `.gitignore`에 `.env`가 포함되어 있는지 확인하세요. 절대 커밋하지 마십시오.
-- CI / 자동화: GitHub Actions 등 CI에서 실행할 경우 `Settings → Secrets`에 `LANGSMITH_API_KEY`를 설정한 뒤 워크플로에서 `secrets.LANGSMITH_API_KEY`로 주입하세요.
-- 다중 사용자 환경: 운영서버나 공유환경에서는 OS 수준의 비밀 관리(예: macOS Keychain, Windows Credential Manager, HashiCorp Vault, AWS Secrets Manager 등)를 사용하세요.
-
-예시: GitHub Actions에서 비밀 사용
-
-1. 리포지토리 Settings → Secrets → Actions → New repository secret
-	- Name: `LANGSMITH_API_KEY`
-	- Value: (실제 키)
-2. 워크플로에서 `secrets.LANGSMITH_API_KEY`를 환경변수로 주입해 사용합니다.
-
+LANGSMITH_API_KEY=...
 ```
 
 ### 3) 테이블 스키마
