@@ -6,6 +6,3 @@ echo "Starting CI ingest..."
 python -V
 python scripts/load_stock_prices.py --universe-csv data/universe.csv --truncate
 echo "CI ingest finished."
-echo "Running examples to generate LangSmith runs (if key present)..."
-python scripts/run_examples.py || true
-echo "Example run finished."

@@ -61,30 +61,80 @@ FinAgent는 이러한 문제를 해결하기 위해
 
 ## 로컬 실행 준비
 
-이 프로젝트는 로컬 MySQL에 `stock_prices` 테이블이 있어야 동작합니다. 데이터는 yfinance에서 최근 6개월치를 받아 적재하는 방식으로 준비하면 됩니다.
+이 프로젝트는 Python 3.11, MySQL 8, OpenAI API, LangSmith를 사용합니다.
+면접용 최소 실행은 아래 순서대로 진행하면 됩니다.
 
 ### 1) 설치
 
 ```bash
-python3 -m venv .venv
+git clone https://github.com/Jaeseong22/fin_agent.git
+cd fin_agent
+
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ### 2) 환경 변수
 
-`.env`에 최소한 아래 값을 넣습니다. 자세한 예시는 `.env.sample`을 참고하세요.
+샘플을 복사한 뒤 본인의 OpenAI/LangSmith 키를 입력합니다.
 
 ```bash
-MYSQL_USER=...
-MYSQL_PASSWORD=...
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_DATABASE=...
-LANGSMITH_API_KEY=...
+cp .env.sample .env
 ```
 
-### 3) 테이블 스키마
+`OPENAI_API_KEY`는 질의 분류, 파싱, 자연어 응답에 사용하는 OpenAI 모델 호출에 필요합니다.
+`LANGSMITH_API_KEY`는 LangSmith에 저장된 `task_classifier`, `parsing_task1`,
+`parsing_task2`, `parsing_task3` 프롬프트를 불러오는 데 필요합니다.
+실제 API 키는 저장소에 커밋하지 마세요.
+
+새 LangSmith 워크스페이스에서 처음 실행한다면 프롬프트를 한 번 등록합니다.
+이 단계 이후 애플리케이션은 항상 LangSmith에서 프롬프트를 불러옵니다.
+
+```bash
+python scripts/bootstrap_langsmith.py
+```
+
+### 3) MySQL 실행 및 샘플 데이터 적재
+
+Docker가 있다면 다음 명령으로 MySQL 8을 실행할 수 있습니다.
+
+```bash
+docker compose up -d mysql
+docker compose ps
+```
+
+MySQL이 준비된 후 면접 테스트용 4개 종목의 최근 6개월 데이터를 적재합니다.
+
+```bash
+python scripts/load_stock_prices.py \
+  --universe-csv data/universe.sample.csv \
+  --truncate
+```
+
+DB 연결과 Task별 사전 검사를 확인합니다.
+
+```bash
+python scripts/check_tasks.py
+```
+
+### 4) 실행
+
+```bash
+python graph/sim.py
+```
+
+입력 예시는 다음과 같습니다. 날짜는 적재된 최근 거래일로 바꿔서 입력합니다.
+
+```text
+2026-06-19 삼성전자 종가 알려줘
+2026-06-19 거래량이 1,000,000주 이상인 종목 알려줘
+2026-05-01부터 2026-06-19까지 삼성전자 RSI 과매수 구간 알려줘
+```
+
+OpenAI 계정에 API 크레딧이 없으면 `429 insufficient_quota`가 발생합니다.
+
+### 5) 테이블 스키마
 
 현재 코드가 실제로 읽는 핵심 테이블은 `stock_prices`입니다.
 `official_name`은 관리 편의를 위한 보조 컬럼이고, 현재 쿼리 로직의 필수 컬럼은 아닙니다.
@@ -129,7 +179,7 @@ volume        : 거래량
 market_cap    : 시가총액 = 종가 * 상장주식수
 ```
 
-### 4) yfinance 적재 흐름
+### 6) 전체 유니버스 적재
 
 적재는 보통 아래 순서로 하면 됩니다.
 
@@ -138,12 +188,6 @@ market_cap    : 시가총액 = 종가 * 상장주식수
 3. `official_name`에는 종목명만 저장한다.
 4. `trade_date`, `open`, `high`, `low`, `close`, `adj_close`, `volume`을 그대로 넣는다.
 5. 시가총액은 별도 스테이징 테이블에서 계산한 뒤 `stock_prices.market_cap`에 업데이트한다.
-
-바로 적재하려면 아래 스크립트를 사용하면 됩니다.
-
-```bash
-python scripts/load_stock_prices.py --universe-csv data/universe.csv --truncate
-```
 
 로컬에서 전체 유니버스를 적재하려면 다음을 권장합니다.
 
@@ -160,12 +204,6 @@ python scripts/load_stock_prices.py --universe-csv data/universe.csv
 ```
 
 3) CI/스케줄링으로 자동 실행하려면 아래의 GitHub Actions 예시를 사용하세요 (비밀은 `Secrets`에 저장).
-
-### GitHub에 푸시할 파일
-- `.github/workflows/ingest.yml` : CI 워크플로 템플릿
-- `scripts/ci_ingest.sh` : Actions에서 호출하는 간단 래퍼
-
-이제 로컬에서 테스트 후 CI 템플릿을 사용해 자동 적재를 구성할 수 있습니다.
 
 `data/universe.csv`는 아래처럼 준비합니다.
 
@@ -201,7 +239,7 @@ JOIN market_cap_stage m
 SET s.market_cap = m.market_cap;
 ```
 
-### 5) 주의사항
+### 7) 주의사항
 
 Task2에서 등락률/거래량 변화율을 계산할 때 `volume`이 `BIGINT UNSIGNED`이면 MySQL 연산 특성상 캐스팅을 명시하는 편이 안전합니다.
 
@@ -212,7 +250,7 @@ Task2에서 등락률/거래량 변화율을 계산할 때 `volume`이 `BIGINT U
 
 현재 코드도 동일한 방식으로 처리하고 있습니다.
 
-### 6) 적재 후 확인
+### 8) 적재 후 확인
 
 ```sql
 SELECT COUNT(*) FROM stock_prices;
@@ -228,18 +266,11 @@ ORDER BY trade_date DESC
 LIMIT 10;
 ```
 
-### 7) 실행
-
-환경 변수와 DB 적재가 끝나면 아래처럼 실행합니다.
-
-```bash
-python graph/sim.py
-```
-
 ⸻
 
 ## Architecture
 
+```mermaid
 flowchart TD
     U[User Message] --> C[task_classifier]
     C -->|Task1| P1[parsing_task1]
@@ -266,6 +297,7 @@ flowchart TD
     T3 --> LA
     CB --> LA
     LA --> END
+```
 
 전체 그래프는 입력 → 분류 → 파싱 → DB 검증 → SQL 실행 → 응답의
 안정적인 처리 파이프라인을 LangGraph로 구현한 구조입니다.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 from types import SimpleNamespace
-from datetime import date
 import sys
 from pathlib import Path
+from sqlalchemy import text
 
 # ensure repo root on sys.path so `import graph.utils` works
 repo_root = Path(__file__).resolve().parents[1]
@@ -11,8 +11,15 @@ sys.path.insert(0, str(repo_root / "graph"))
 
 import graph.utils as gu
 
-# pick a recent date from DB range
-sample_date = '2026-06-19'
+with gu.ENGINE.connect() as conn:
+    sample_date = conn.execute(
+        text("SELECT MAX(trade_date) FROM stock_prices")
+    ).scalar()
+
+if sample_date is None:
+    raise SystemExit("stock_prices is empty. Run scripts/load_stock_prices.py first.")
+
+sample_date = sample_date.isoformat()
 
 t1 = SimpleNamespace(date=sample_date, market='KOSPI', clauses=None)
 print('check_task1 (single date, KOSPI):', gu.check_task1(t1))
@@ -22,8 +29,8 @@ t2 = SimpleNamespace(date=sample_date, market='KOSDAQ', clauses=[{'type':'price_
 print('check_task2 (single date, KOSDAQ, clauses):', gu.check_task2(t2))
 
 # Task3: period range and signal_type
-period_start = '2026-06-01'
-period_end = '2026-06-19'
+period_start = sample_date
+period_end = sample_date
 t3 = SimpleNamespace(period_start=period_start, period_end=period_end, market=['KOSPI','KOSDAQ'], signal_type={'type':'rsi'})
 print('check_task3 (range with rsi signal):', gu.check_task3(t3))
 

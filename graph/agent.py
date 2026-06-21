@@ -1,7 +1,5 @@
 from dotenv import load_dotenv
-from langchain_teddynote import logging
 load_dotenv()
-logging.langsmith("fin_agent")
 
 import os
 import json
@@ -36,25 +34,28 @@ from langsmith import Client
 # 맨 위 근처에 상수 추가
 DEFAULT_Q = "원하시는 조건을 더 구체적으로 알려주세요. 예) 기간, 시장(KOSPI/KOSDAQ), 신호 종류 등"
 
-client = Client(api_key=os.environ.get("LANGSMITH_API_KEY"))
-task_classifier_prompt = client.pull_prompt("task_classifier", include_model=True)
-
 llm = ChatOpenAI(temperature=0.2, 
                  model="gpt-4o-mini",)
+
+client = Client(api_key=os.environ.get("LANGSMITH_API_KEY"))
+task_classifier_prompt = client.pull_prompt(
+    "task_classifier",
+    include_model=True,
+    secrets_from_env=True,
+)
+
 
 def task_classifier(state: State) -> Command[Literal["query_parsing", "ask_human","chatbot"]]:
     messages = state["messages"][-1]
     chain = task_classifier_prompt
     result = chain.invoke({"messages" : messages.content})
-    tool_calls = result.additional_kwargs.get("tool_calls", [])
-    if not tool_calls:
-        # 분류 실패 시 챗봇으로
-        return Command(goto="chatbot")
-
     try:
+        tool_calls = result.additional_kwargs.get("tool_calls", [])
+        if not tool_calls:
+            return Command(goto="chatbot")
         arguments_str = tool_calls[0]["function"]["arguments"]
         arguments = json.loads(arguments_str)
-        task = arguments.get("Task")  # "Task1"|"Task2"|"Task3"|"Chatbot"
+        task = arguments.get("Task")
     except Exception as e:
         print("task parse error:", e)
         return Command(goto="chatbot")
@@ -103,7 +104,11 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
 
     match task:
         case "Task1":
-            parsing_prompt = client.pull_prompt("parsing_task1", include_model=True)
+            parsing_prompt = client.pull_prompt(
+                "parsing_task1",
+                include_model=True,
+                secrets_from_env=True,
+            )
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
@@ -117,7 +122,11 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
             return Command(goto="db_check", update={"task": updated_task})
         
         case "Task2":
-            parsing_prompt = client.pull_prompt("parsing_task2", include_model=True)
+            parsing_prompt = client.pull_prompt(
+                "parsing_task2",
+                include_model=True,
+                secrets_from_env=True,
+            )
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:
@@ -131,7 +140,11 @@ def query_parsing(state: State) -> Command[Literal["db_check", "ask_human"]]:
             return Command(goto="db_check", update={"task": updated_task})
             
         case "Task3":
-            parsing_prompt = client.pull_prompt("parsing_task3", include_model=True)
+            parsing_prompt = client.pull_prompt(
+                "parsing_task3",
+                include_model=True,
+                secrets_from_env=True,
+            )
             result = parsing_prompt.invoke({"messages" : messages.content})
             data = parse_tool_json(result)
             if not data:

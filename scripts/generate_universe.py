@@ -44,7 +44,7 @@ def generate(input_path, output_path):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--input", "-i", default="/Users/jaeseong/Downloads/data_4019_20260621.csv")
+    p.add_argument("--input", "-i", required=True)
     p.add_argument("--output", "-o", default="data/universe.csv")
     args = p.parse_args()
     generate(args.input, args.output)

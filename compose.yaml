@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: finagent-root
+      MYSQL_DATABASE: fin_agent
+      MYSQL_USER: finagent
+      MYSQL_PASSWORD: finagent
+    ports:
+      - "3306:3306"
+    volumes:
+      - finagent-mysql:/var/lib/mysql
+      - ./sql/init_stock_prices.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ufinagent", "-pfinagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  finagent-mysql:

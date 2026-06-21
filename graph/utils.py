@@ -29,8 +29,9 @@ load_dotenv()
 # 환경 변수 & 엔진
 # ============================================================
 
-COMPANY_CSV = Path("/Users/jaeseong/Documents/finance_agent/graph/company_name.csv")
-TERMS_CSV   = Path("/Users/jaeseong/Documents/finance_agent/graph/stock_terms.csv")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+COMPANY_CSV = REPO_ROOT / "data" / "universe.csv"
+TERMS_CSV = REPO_ROOT / "data" / "stock_terms.csv"
 
 _COMPANY_ALIASES: List[Dict[str, str]] = []
 _TERM_RULES: List[Dict[str, str]] = []
@@ -1797,7 +1798,7 @@ def _load_term_rules() -> List[Dict[str, str]]:
 
 def fuzzy_match_company_name(name: str, limit: int = 5) -> List[Tuple[str, float, Dict[str, str]]]:
     """
-    입력 문자열 name에 대해 company_name.csv의 alias를 기준으로 퍼지 후보를 반환.
+    입력 문자열 name에 대해 data/universe.csv의 alias를 기준으로 퍼지 후보를 반환.
     return: [(official, score, meta_dict), ...]  (score: 0~100)
     """
     aliases = _load_company_aliases()

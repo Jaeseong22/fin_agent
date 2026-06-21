@@ -230,8 +230,3 @@ pyrightconfig.json
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,visualstudiocode,python
-
-git config --global core.excludesfile ~/.gitignore_global
-echo ".DS_Store" >> ~/.gitignore_global
-
-makefile
