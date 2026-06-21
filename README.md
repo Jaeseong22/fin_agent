@@ -62,7 +62,6 @@ FinAgent는 이러한 문제를 해결하기 위해
 ## 로컬 실행 준비
 
 이 프로젝트는 Python 3.11, MySQL 8, OpenAI API, LangSmith Hub를 사용합니다.
-면접용 최소 실행은 아래 순서대로 진행하면 됩니다.
 
 ### 1) 설치
 
@@ -77,7 +76,7 @@ pip install -r requirements.txt
 
 ### 2) 환경 변수
 
-샘플을 복사한 뒤 본인의 OpenAI API 키를 입력합니다.
+환경 변수 파일을 생성하고 `OPENAI_API_KEY`를 입력합니다.
 
 ```bash
 cp .env.sample .env
@@ -88,20 +87,17 @@ cp .env.sample .env
 `jaeseong22/task_classifier`, `jaeseong22/parsing_task1`,
 `jaeseong22/parsing_task2`, `jaeseong22/parsing_task3`에서 직접 불러옵니다.
 따라서 프롬프트 사용에는 `LANGSMITH_API_KEY`가 필요하지 않습니다.
-자신의 LangSmith 워크스페이스에 실행 trace를 남기려면 선택적으로
-`LANGSMITH_API_KEY`를 설정하고 `LANGSMITH_TRACING=true`로 변경합니다.
-실제 API 키는 저장소에 커밋하지 마세요.
 
 ### 3) MySQL 실행 및 샘플 데이터 적재
 
-Docker가 있다면 다음 명령으로 MySQL 8을 실행할 수 있습니다.
+Docker Compose로 MySQL 8을 실행합니다.
 
 ```bash
 docker compose up -d mysql
 docker compose ps
 ```
 
-MySQL이 준비된 후 면접 테스트용 4개 종목의 최근 6개월 데이터를 적재합니다.
+MySQL이 준비되면 샘플 유니버스의 최근 6개월 데이터를 적재합니다.
 
 ```bash
 python scripts/load_stock_prices.py \
@@ -109,7 +105,7 @@ python scripts/load_stock_prices.py \
   --truncate
 ```
 
-DB 연결과 Task별 사전 검사를 확인합니다.
+DB 연결과 데이터 상태를 확인합니다.
 
 ```bash
 python scripts/check_tasks.py
@@ -120,16 +116,6 @@ python scripts/check_tasks.py
 ```bash
 python graph/sim.py
 ```
-
-입력 예시는 다음과 같습니다. 날짜는 적재된 최근 거래일로 바꿔서 입력합니다.
-
-```text
-2026-06-19 삼성전자 종가 알려줘
-2026-06-19 거래량이 1,000,000주 이상인 종목 알려줘
-2026-05-01부터 2026-06-19까지 삼성전자 RSI 과매수 구간 알려줘
-```
-
-OpenAI 계정에 API 크레딧이 없으면 `429 insufficient_quota`가 발생합니다.
 
 ### 5) 테이블 스키마
 
