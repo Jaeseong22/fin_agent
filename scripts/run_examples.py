@@ -13,6 +13,7 @@ from urllib.parse import quote_plus
 from dotenv import load_dotenv
 import os
 from sqlalchemy import create_engine, text
+import scripts.langsmith_client as lsc
 
 load_dotenv()
 
@@ -43,8 +44,10 @@ def period_return(engine, company_keyword, ds, de):
     return (last / first - 1.0) * 100.0
 
 def example_compare_3m(engine):
+    run = lsc.start_run("compare_3m", {"task":"compare_3m"})
     latest = get_latest_date(engine)
     if latest is None:
+        lsc.finish_run(run, {"error":"no_data"})
         print('No data')
         return
     end = latest
@@ -65,14 +68,22 @@ def example_compare_3m(engine):
     if ra is not None and rb is not None:
         if ra > rb:
             print('결론: 삼성전자가 우위')
+            lsc.finish_run(run, {"result":"삼성우위","ra":ra,"rb":rb})
         elif rb > ra:
             print('결론: LG전자가 우위')
+            lsc.finish_run(run, {"result":"LG우위","ra":ra,"rb":rb})
         else:
             print('결론: 두 종목 수익률 동일')
+            lsc.finish_run(run, {"result":"동일","ra":ra,"rb":rb})
+    else:
+        # partial or missing data
+        lsc.finish_run(run, {"ra": ra, "rb": rb})
 
 def example_rsi_70(engine):
+    run = lsc.start_run("rsi_70_list", {"task":"rsi_70_list"})
     latest = get_latest_date(engine)
     if latest is None:
+        lsc.finish_run(run, {"error":"no_data"})
         print('No data')
         return
     end = latest
@@ -80,7 +91,9 @@ def example_rsi_70(engine):
     task = Task3(company_name=None, market=None, period_start=start.isoformat(), period_end=end.isoformat(), signal_type=[{"type":"rsi","threshold":70,"condition":"overbought"}], mode="list")
     res = gu.run_task3_query(task, engine)
     print('=== RSI ≥ 70 종목 (최근 3개월) ===')
-    print(gu._r_task3(res))
+    out = gu._r_task3(res)
+    print(out)
+    lsc.finish_run(run, {"result": out})
 
 def main():
     engine = make_engine()
